@@ -1,6 +1,7 @@
 "use client";
 
 import Image from "next/image";
+import type { MouseEvent } from "react";
 import { useDeferredValue, useMemo, useState } from "react";
 
 type PackItem = {
@@ -48,6 +49,12 @@ type TierRow = {
   label: string;
 };
 
+type RowMenu = {
+  tierId: string;
+  x: number;
+  y: number;
+} | null;
+
 function apiUrl(path: string) {
   return `${API_BASE}${path}`;
 }
@@ -58,6 +65,9 @@ export default function Home() {
   const [description, setDescription] = useState("");
   const [tiers, setTiers] = useState(DEFAULT_TIERS);
   const [selectedTierId, setSelectedTierId] = useState(DEFAULT_TIERS[0].id);
+  const [rowMenu, setRowMenu] = useState<RowMenu>(null);
+  const [draggedTierId, setDraggedTierId] = useState<string | null>(null);
+  const [dragOverTierId, setDragOverTierId] = useState<string | null>(null);
   const [preset, setPreset] = useState("arcade");
   const [pack, setPack] = useState<PackResponse | null>(null);
   const [board, setBoard] = useState<Record<string, PackItem[]>>({});
@@ -136,6 +146,7 @@ export default function Home() {
 
     setTiers((current) => [...current.slice(0, insertAt), newTier, ...current.slice(insertAt)]);
     setSelectedTierId(newTier.id);
+    setRowMenu(null);
   }
 
   function deleteSelectedTier() {
@@ -155,10 +166,38 @@ export default function Home() {
       return rest;
     });
     setSelectedTierId(nextSelected.id);
+    setRowMenu(null);
+  }
+
+  function openRowMenu(event: MouseEvent, tierId: string) {
+    event.preventDefault();
+    setSelectedTierId(tierId);
+    setRowMenu({ tierId, x: event.clientX, y: event.clientY });
+  }
+
+  function moveDraggedTier(targetTierId: string) {
+    if (!draggedTierId || draggedTierId === targetTierId) {
+      return;
+    }
+
+    setTiers((current) => {
+      const draggedIndex = current.findIndex((tier) => tier.id === draggedTierId);
+      const targetIndex = current.findIndex((tier) => tier.id === targetTierId);
+      if (draggedIndex < 0 || targetIndex < 0) {
+        return current;
+      }
+
+      const next = [...current];
+      const [dragged] = next.splice(draggedIndex, 1);
+      next.splice(targetIndex, 0, dragged);
+      return next;
+    });
+    setDraggedTierId(null);
+    setDragOverTierId(null);
   }
 
   return (
-    <main className="tm-page">
+    <main className="tm-page" onClick={() => setRowMenu(null)}>
       <nav className="topbar" aria-label="Tierzo demo navigation">
         <div className="pixel-mark" aria-hidden="true">
           <span />
@@ -194,8 +233,7 @@ export default function Home() {
       <section className="maker-panel" aria-label="Tierzo tier list demo">
         <div className="preview-head">
           <div>
-            <p className="kicker">Tierzo Demo 01</p>
-            <h2>{pack ? "Generated pack preview" : "Paste a list below to generate cards"}</h2>
+            <h2>{title} preview</h2>
           </div>
           {pack ? (
             <a className="download" href={apiUrl(pack.zip_url)}>
@@ -207,19 +245,56 @@ export default function Home() {
         <div className="board">
           {tiers.map((tier, index) => (
             <div
-              className={`tier-row ${selectedTierId === tier.id ? "selected" : ""}`}
+              className={`tier-row ${selectedTierId === tier.id ? "selected" : ""} ${draggedTierId === tier.id ? "dragging" : ""}`}
               key={tier.id}
               onClick={() => setSelectedTierId(tier.id)}
+              onContextMenu={(event) => openRowMenu(event, tier.id)}
+              onDragEnter={() => setDragOverTierId(tier.id)}
+              onDragOver={(event) => {
+                event.preventDefault();
+                setDragOverTierId(tier.id);
+              }}
+              onDragLeave={() => setDragOverTierId((current) => (current === tier.id ? null : current))}
+              onDrop={() => moveDraggedTier(tier.id)}
+              data-drag-over={dragOverTierId === tier.id ? "true" : undefined}
             >
-              <input
-                aria-label={`Tier ${index + 1} label`}
-                className="tier-label"
-                value={tier.label}
-                onFocus={() => setSelectedTierId(tier.id)}
-                onChange={(event) => {
-                  updateTierLabel(tier.id, event.target.value);
-                }}
-              />
+              <div className="tier-label-cell">
+                <button
+                  aria-label={`Drag tier ${index + 1}`}
+                  className="row-grip"
+                  draggable
+                  type="button"
+                  onDragStart={(event) => {
+                    event.dataTransfer.effectAllowed = "move";
+                    event.dataTransfer.setData("text/plain", tier.id);
+                    setSelectedTierId(tier.id);
+                    setDraggedTierId(tier.id);
+                  }}
+                  onDragEnd={() => {
+                    setDraggedTierId(null);
+                    setDragOverTierId(null);
+                  }}
+                />
+                <div
+                  aria-label={`Tier ${index + 1} label`}
+                  className="tier-label"
+                  contentEditable
+                  role="textbox"
+                  spellCheck={false}
+                  suppressContentEditableWarning
+                  onFocus={() => setSelectedTierId(tier.id)}
+                  onInput={(event) => {
+                    updateTierLabel(tier.id, event.currentTarget.textContent ?? "");
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                    }
+                  }}
+                >
+                  {tier.label}
+                </div>
+              </div>
               <div className="tier-items">
                 {(board[tier.id] ?? []).map((item) => (
                   <Card item={item} key={item.id} />
@@ -230,34 +305,10 @@ export default function Home() {
         </div>
 
         <div className="toolbar" aria-label="Tierzo actions">
-          <button className="tool-button ghost" type="button">
-            Upload Images
-          </button>
-          <button className="tool-button ghost" type="button">
-            Upload Videos
-          </button>
-          <button className="tool-button" type="button" onClick={generatePack} disabled={isGenerating || itemCount === 0}>
-            {isGenerating ? "Generating..." : "Generate with Tierzo"}
-          </button>
-          <span className="edit-link">Edit</span>
-        </div>
-
-        <div className="tier-actions" aria-label="Tier row controls">
-          <span>{selectedTierIndex >= 0 ? `Selected row ${selectedTierIndex + 1}` : "Select a row"}</span>
-          <button type="button" onClick={() => insertTier(0)} disabled={tiers.length >= MAX_TIERS}>
-            Add row above
-          </button>
-          <button type="button" onClick={() => insertTier(1)} disabled={tiers.length >= MAX_TIERS}>
-            Add row below
-          </button>
-          <button type="button" onClick={deleteSelectedTier} disabled={tiers.length <= 1}>
-            Delete row
-          </button>
-          <strong>{tiers.length}/{MAX_TIERS}</strong>
+          <strong className="row-count">{tiers.length}/{MAX_TIERS}</strong>
         </div>
 
         <div className="bench">
-          <div className="bench-label">Drop images here or drag to tiers above</div>
           <div className="bench-items">
             {benchItems.length > 0 ? benchItems.map((item) => <Card item={item} key={item.id} />) : <span>Generated cards will land here.</span>}
           </div>
@@ -302,14 +353,24 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="footer-actions">
-          <button type="button">New Tier List</button>
-          <button type="button">Save Draft</button>
-          <button type="button">Export PNG</button>
-          <button type="button">Share Link</button>
-          <button type="button">Rank with Friends</button>
-          <button type="button">Publish</button>
-        </div>
+        {rowMenu ? (
+          <div
+            className="row-menu"
+            style={{ left: rowMenu.x, top: rowMenu.y }}
+            onClick={(event) => event.stopPropagation()}
+            role="menu"
+          >
+            <button role="menuitem" type="button" onClick={() => insertTier(0)} disabled={tiers.length >= MAX_TIERS}>
+              Add row above
+            </button>
+            <button role="menuitem" type="button" onClick={() => insertTier(1)} disabled={tiers.length >= MAX_TIERS}>
+              Add row below
+            </button>
+            <button role="menuitem" type="button" onClick={deleteSelectedTier} disabled={tiers.length <= 1}>
+              Delete row
+            </button>
+          </div>
+        ) : null}
       </section>
     </main>
   );

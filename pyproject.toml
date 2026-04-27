@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tierzo"
+version = "0.1.0"
+description = "Agentic tier-list asset generator core and CLI."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "openpyxl>=3.1.0",
+  "Pillow>=10.0.0",
+]
+
+[project.scripts]
+tierzo = "tierzo.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

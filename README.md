@@ -1,235 +1,154 @@
-# Tiermaker Generator
+# Tierzo
 
-Este proyecto contiene un script simple para convertir la primera columna de un archivo Excel (`.xlsx`) en imagenes PNG. Cada celda no vacia de la columna A se convierte en una imagen cuadrada con el texto centrado.
+Tierzo is an open-source, agentic tier-list asset generator. It turns messy lists, spreadsheets, and eventually links or prompts into polished image packs, tier-board previews, and TierMaker-ready exports.
 
-El caso de uso principal es generar imagenes consistentes para tier lists, donde cada item necesita tener el mismo tamano y una orientacion uniforme.
+The current version is the first technical foundation: a reusable Python core, a CLI, text-card presets, ZIP export, and `manifest.json` generation.
 
-## Que hace
+## What Works Today
 
-- Lee el primer worksheet del archivo `.xlsx`.
-- Toma todos los valores no vacios de la primera columna, es decir, la columna A.
-- Genera una imagen PNG por cada celda.
-- Usa un tamano cuadrado consistente para todas las imagenes.
-- Centra el texto horizontal y verticalmente.
-- Ajusta el tamano de la fuente automaticamente si el texto es largo.
-- Divide el texto en varias lineas cuando no cabe en una sola linea.
-- Guarda los archivos como `001.png`, `002.png`, `003.png`, etc.
+- Read `.txt`, `.csv`, and `.xlsx` inputs.
+- Use the first column from CSV/XLSX files.
+- Generate one square PNG per item.
+- Auto-fit and wrap long text.
+- Use basic visual presets.
+- Write a portable `manifest.json`.
+- Export a ZIP bundle.
+- Keep the legacy Excel script working.
 
-## Requisitos
+## Install
 
-Necesitas tener instalado:
-
-- Python 3.10 o superior.
-- `pip`, normalmente incluido con Python.
-
-Las dependencias del proyecto estan en `requirements.txt`:
-
-- `openpyxl`: para leer archivos Excel `.xlsx`.
-- `Pillow`: para generar imagenes PNG.
-
-## Setup inicial
-
-Abre PowerShell en la carpeta del proyecto:
+Use Python 3.10 or newer.
 
 ```powershell
-cd C:\Users\akuma\repos\tiermaker-generator
+python -m pip install -e .
 ```
 
-Instala las dependencias:
-
-```powershell
-pip install -r requirements.txt
-```
-
-Si tu instalacion usa `python -m pip`, ejecuta:
+Or install dependencies directly for the legacy script:
 
 ```powershell
 python -m pip install -r requirements.txt
 ```
 
-## Formato esperado del Excel
+## CLI Usage
 
-El script espera un archivo `.xlsx`.
+Generate a pack from a text file:
 
-Solo usa la primera hoja del Excel y solo lee la primera columna:
+```powershell
+python -m tierzo .\items.txt
+```
+
+Generate a styled pack with slug filenames and a ZIP:
+
+```powershell
+python -m tierzo .\items.txt --preset arcade --filename-mode both --zip
+```
+
+Generate from Excel:
+
+```powershell
+python -m tierzo .\items.xlsx
+```
+
+Choose output folder and image size:
+
+```powershell
+python -m tierzo .\items.csv --output .\output --size 768
+```
+
+## Presets
+
+Available text-card presets:
+
+- `clean`
+- `dark`
+- `arcade`
+- `bubblegum`
+
+Example:
+
+```powershell
+python -m tierzo .\items.txt --preset bubblegum
+```
+
+## Filename Modes
+
+Use `--filename-mode` to choose generated image names:
+
+- `index`: `001.png`
+- `slug`: `princess-peach.png`
+- `both`: `003-princess-peach.png`
+
+Example:
+
+```powershell
+python -m tierzo .\items.txt --filename-mode both
+```
+
+## Output
+
+For an input file named `items.txt`, Tierzo creates `items_tierzo` by default:
 
 ```text
-Columna A
----------
-Mario
-Luigi
-Princess Peach
-Bowser
-Texto largo que se ajustara automaticamente
+items_tierzo/
+  001.png
+  002.png
+  003.png
+  manifest.json
 ```
 
-Las celdas vacias se ignoran.
-
-## Como correrlo
-
-Uso basico:
-
-```powershell
-python generate_text_images.py .\archivo.xlsx
-```
-
-Ejemplo:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx
-```
-
-Si el archivo se llama `personajes.xlsx`, el script creara una carpeta llamada:
+With `--zip`, Tierzo also creates:
 
 ```text
-personajes_images
+items_tierzo.zip
 ```
 
-Dentro de esa carpeta se generaran imagenes como:
+## Legacy Excel Script
 
-```text
-001.png
-002.png
-003.png
-```
-
-## Elegir carpeta de salida
-
-Puedes indicar una carpeta de salida con `--output` o `-o`:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx --output .\imagenes
-```
-
-Tambien funciona asi:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx -o .\imagenes
-```
-
-## Cambiar el tamano de las imagenes
-
-Por defecto, cada imagen mide `1024x1024` pixeles.
-
-Para generar imagenes de otro tamano:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx --size 512
-```
-
-Esto genera imagenes de `512x512`.
-
-## Cambiar colores
-
-Color de fondo:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx --background "#FFFFFF"
-```
-
-Color del texto:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx --text-color "#000000"
-```
-
-Ejemplo con fondo oscuro y texto claro:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx --background "#111111" --text-color "#FFFFFF"
-```
-
-## Usar una fuente personalizada
-
-El script intenta usar fuentes comunes de Windows como Arial, Segoe UI, Calibri o Tahoma.
-
-Si quieres usar una fuente especifica, pasa la ruta al archivo `.ttf` o `.otf`:
-
-```powershell
-python generate_text_images.py .\personajes.xlsx --font "C:\Windows\Fonts\arial.ttf"
-```
-
-## Opciones disponibles
-
-```text
-Argumento              Descripcion
----------------------  ----------------------------------------------------
-xlsx_file              Archivo Excel de entrada.
--o, --output           Carpeta donde se guardaran las imagenes.
---size                 Tamano cuadrado de la imagen en pixeles.
---background           Color de fondo. Por defecto: #FFFFFF.
---text-color           Color del texto. Por defecto: #000000.
---font                 Ruta opcional a una fuente .ttf o .otf.
-```
-
-Tambien puedes ver la ayuda desde la terminal:
-
-```powershell
-python generate_text_images.py --help
-```
-
-## Ejemplos completos
-
-Generar imagenes con la configuracion default:
+The original command still works:
 
 ```powershell
 python generate_text_images.py .\items.xlsx
 ```
 
-Generar imagenes de `768x768` en una carpeta especifica:
+It reads the first worksheet, takes every non-empty value from column A, and generates numbered PNGs.
+
+## Product Direction
+
+Tierzo is heading toward:
+
+- A Next.js web demo with paste/upload.
+- A tier-board preview with drag-and-drop ranking.
+- Final PNG export.
+- TierMaker-ready ZIP batches.
+- Agentic list cleanup and entity resolution.
+- API enrichers for movies, games, anime, music, and more.
+- A Chrome extension companion for guided TierMaker workflows.
+
+Read more:
+
+- [Product brief](PRODUCT.md)
+- [Roadmap](ROADMAP.md)
+- [Architecture](ARCHITECTURE.md)
+- [Open-core model](OPEN_CORE.md)
+
+## Development
+
+Install locally:
 
 ```powershell
-python generate_text_images.py .\items.xlsx --size 768 --output .\output
+python -m pip install -e .
 ```
 
-Generar imagenes con fondo negro, texto blanco y fuente Arial:
+Run the CLI:
 
 ```powershell
-python generate_text_images.py .\items.xlsx --background "#000000" --text-color "#FFFFFF" --font "C:\Windows\Fonts\arial.ttf"
+python -m tierzo --help
 ```
 
-## Problemas comunes
-
-### `python` no se reconoce como comando
-
-Si PowerShell dice que `python` no existe, prueba cerrar y abrir PowerShell de nuevo. Si sigue pasando, revisa que Python este agregado al `PATH`.
-
-Tambien puedes probar:
+Run tests:
 
 ```powershell
-py generate_text_images.py .\archivo.xlsx
+python -m unittest discover -s tests
 ```
 
-### Falta una dependencia
-
-Si aparece un error como `ModuleNotFoundError: No module named 'PIL'` o `No module named 'openpyxl'`, instala las dependencias:
-
-```powershell
-pip install -r requirements.txt
-```
-
-O:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-### El texto sale muy pequeno
-
-Eso normalmente significa que una celda tiene demasiado texto para el tamano elegido. Puedes probar con un tamano de imagen mas grande:
-
-```powershell
-python generate_text_images.py .\archivo.xlsx --size 1536
-```
-
-### No se genera ninguna imagen
-
-Revisa que el archivo tenga datos en la columna A de la primera hoja. Las celdas vacias se saltan.
-
-## Archivos del proyecto
-
-```text
-generate_text_images.py  Script principal.
-requirements.txt         Dependencias necesarias.
-README.md                Documentacion de uso.
-```
+Generated files are ignored by git when they use the default `*_tierzo`, `*_images`, `.tierzo`, or `.zip` paths.

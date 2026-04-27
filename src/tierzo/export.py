@@ -19,6 +19,7 @@ def generate_pack(
     preset: TextCardPreset,
     filename_mode: str,
     write_manifest: bool,
+    extra_manifest: dict[str, object] | None = None,
 ) -> PackManifest:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -45,14 +46,23 @@ def generate_pack(
 
     manifest = PackManifest(title=title, version="0.1.0", items=items)
     if write_manifest:
-        write_manifest_file(manifest, output_dir / "manifest.json")
+        write_manifest_file(manifest, output_dir / "manifest.json", extra_manifest=extra_manifest)
 
     return manifest
 
 
-def write_manifest_file(manifest: PackManifest, output_path: Path) -> None:
+def write_manifest_file(
+    manifest: PackManifest,
+    output_path: Path,
+    *,
+    extra_manifest: dict[str, object] | None = None,
+) -> None:
+    data = manifest.to_dict()
+    if extra_manifest:
+        data.update(extra_manifest)
+
     output_path.write_text(
-        json.dumps(manifest.to_dict(), indent=2, ensure_ascii=False) + "\n",
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
         encoding="utf-8",
     )
 

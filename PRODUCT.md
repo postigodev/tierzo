@@ -23,6 +23,12 @@ Tierzo is not a TierMaker clone. It is the prep layer before and around tier-lis
 
 Paste anything. Tierzo figures out what it is, builds the image pack, lets you preview the tier list, and exports the result.
 
+## Demo Priority
+
+Tierzo should be demo-led. Every major feature should move the project closer to a public flow that is easy to understand, visually strong, and useful without reading documentation.
+
+The first impressive demo matters as much as the first complete backend. See `DEMO.md` for the demo contract.
+
 ## Product Pillars
 
 ### Universal Intake

@@ -2,6 +2,8 @@
 
 Tierzo should be built as a modular product with a reusable core, a public web demo, an agentic backend, and an optional browser extension companion.
 
+The architecture should optimize for demoable slices. A feature is more valuable when it can be seen, exported, or shared from the web demo.
+
 ## Proposed Monorepo
 
 ```text
@@ -62,6 +64,8 @@ The web app is the product surface:
 - Export TierMaker-ready ZIP.
 
 Next.js is the preferred frontend because the project needs a deployable demo, strong routing, shareable pages, and a polished React interface.
+
+The first screen should be the usable generator experience, not a marketing hero. See `DEMO.md` for visual and interaction requirements.
 
 ### Agent
 

@@ -124,11 +124,41 @@ Tierzo is heading toward:
 - API enrichers for movies, games, anime, music, and more.
 - A Chrome extension companion for guided TierMaker workflows.
 
+## Demo App
+
+The first web demo lives in `apps/web` and talks to the FastAPI service in `apps/api`.
+
+Run the API:
+
+```powershell
+pnpm api:dev
+```
+
+Run the web app in another terminal:
+
+```powershell
+pnpm web:dev
+```
+
+Open:
+
+```text
+http://localhost:3000
+```
+
+Verify the running demo with Playwright:
+
+```powershell
+pnpm demo:verify
+```
+
 Read more:
 
 - [Product brief](PRODUCT.md)
+- [Demo plan](DEMO.md)
 - [Roadmap](ROADMAP.md)
 - [Architecture](ARCHITECTURE.md)
+- [Browser extension contract](EXTENSION.md)
 - [Open-core model](OPEN_CORE.md)
 
 ## Development

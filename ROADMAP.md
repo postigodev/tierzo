@@ -1,6 +1,6 @@
 # Tierzo Roadmap
 
-This roadmap favors visible demos, useful exports, and stable primitives over broad platform scope.
+This roadmap favors visible demos, useful exports, and stable primitives over broad platform scope. The demo is a first-class milestone, not launch polish.
 
 ## Phase 0: Product Foundation
 
@@ -18,6 +18,7 @@ This roadmap favors visible demos, useful exports, and stable primitives over br
 - Add ZIP export.
 - Generate `manifest.json` with item names, filenames, styles, and source metadata.
 - Add focused tests for parsing, wrapping, image output, ZIP export, and empty input.
+- Produce sample demo artifacts for README screenshots and ZIP inspection.
 
 ## Phase 2: Web Demo
 
@@ -29,6 +30,7 @@ This roadmap favors visible demos, useful exports, and stable primitives over br
 - Export final tier-list PNG.
 - Export asset ZIP.
 - Deploy the demo early.
+- Use `DEMO.md` as the acceptance checklist for this phase.
 
 ## Phase 3: Agentic Intake
 

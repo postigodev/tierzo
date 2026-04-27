@@ -15,6 +15,7 @@ Tierzo is an agentic tier-list asset generator. Treat it as a product, not just 
 - Prefer small, demonstrable slices over broad rewrites.
 - Keep TierMaker integration user-mediated; do not depend on private TierMaker APIs.
 - Make every user-facing feature visible in a demo, screenshot, or export artifact.
+- Treat `DEMO.md` as a product constraint. When tradeoffs are close, choose the path that improves the next demo.
 
 ## Expected Stack
 
@@ -45,6 +46,7 @@ For frontend changes:
 
 - Run lint/build checks when available.
 - Start the dev server and visually verify the main flow.
+- Check the flow against `DEMO.md` before calling it complete.
 
 For API changes:
 

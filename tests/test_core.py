@@ -51,6 +51,7 @@ class TierzoCoreTests(unittest.TestCase):
             preset=get_preset("clean"),
             filename_mode="both",
             write_manifest=True,
+            extra_manifest={"description": "A smoke pack"},
         )
 
         self.assertEqual(len(manifest.items), 2)
@@ -59,6 +60,7 @@ class TierzoCoreTests(unittest.TestCase):
 
         manifest_data = json.loads((output_dir / "manifest.json").read_text(encoding="utf-8"))
         self.assertEqual(manifest_data["title"], "Smoke Pack")
+        self.assertEqual(manifest_data["description"], "A smoke pack")
         self.assertEqual(manifest_data["items"][0]["filename"], "001-mario.png")
 
     def test_zip_pack_writes_archive(self) -> None:

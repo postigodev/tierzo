@@ -11,6 +11,15 @@ class TextCardPreset:
     text_color: str
     accent_color: str | None = None
     font_path: Path | None = None
+    font_label: str = "default"
+    background_opacity: float = 1.0
+    border_width: int = 4
+    corner_radius: int = 8
+    glow_blur: int = 0
+    italic: bool = False
+    underline: bool = False
+    strike: bool = False
+    text_shadow: bool = False
 
 
 PRESETS: dict[str, TextCardPreset] = {
@@ -18,6 +27,46 @@ PRESETS: dict[str, TextCardPreset] = {
     "dark": TextCardPreset(name="dark", background="#111111", text_color="#FFFFFF"),
     "arcade": TextCardPreset(name="arcade", background="#101820", text_color="#FEE715", accent_color="#FEE715"),
     "bubblegum": TextCardPreset(name="bubblegum", background="#FDE7F3", text_color="#241623", accent_color="#FF4F9A"),
+    "hero-hud": TextCardPreset(
+        name="hero-hud",
+        background="#F2F0E8",
+        text_color="#1E2633",
+        accent_color="#F59E0B",
+        font_path=Path("C:/Windows/Fonts/impact.ttf"),
+        font_label="impact",
+    ),
+    "mono-soul": TextCardPreset(
+        name="mono-soul",
+        background="#050505",
+        text_color="#FFFFFF",
+        accent_color="#FF2E49",
+        font_path=Path("C:/Windows/Fonts/consolab.ttf"),
+        font_label="consolas",
+    ),
+    "creature-dex": TextCardPreset(
+        name="creature-dex",
+        background="#2B6DE8",
+        text_color="#FFF6A8",
+        accent_color="#FFCB05",
+        font_path=Path("C:/Windows/Fonts/trebucbd.ttf"),
+        font_label="trebuchet",
+    ),
+    "cyber-mint": TextCardPreset(
+        name="cyber-mint",
+        background="#071E22",
+        text_color="#D8FFF3",
+        accent_color="#25F4C8",
+        font_path=Path("C:/Windows/Fonts/bahnschrift.ttf"),
+        font_label="bahnschrift",
+    ),
+    "blood-moon": TextCardPreset(
+        name="blood-moon",
+        background="#21070A",
+        text_color="#FFE8D6",
+        accent_color="#D72638",
+        font_path=Path("C:/Windows/Fonts/georgiab.ttf"),
+        font_label="georgia",
+    ),
 }
 
 

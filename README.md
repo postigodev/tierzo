@@ -11,6 +11,8 @@ The current version is the first technical foundation: a reusable Python core, a
 - Generate one square PNG per item.
 - Auto-fit and wrap long text.
 - Use basic visual presets.
+- Tune cards in the web Card Lab.
+- Optionally enrich movie lists with TMDb posters.
 - Write a portable `manifest.json`.
 - Export a ZIP bundle.
 - Keep the legacy Excel script working.
@@ -63,6 +65,11 @@ Available text-card presets:
 - `dark`
 - `arcade`
 - `bubblegum`
+- `hero-hud`
+- `mono-soul`
+- `creature-dex`
+- `cyber-mint`
+- `blood-moon`
 
 Example:
 
@@ -127,6 +134,12 @@ Tierzo is heading toward:
 ## Demo App
 
 The first web demo lives in `apps/web` and talks to the FastAPI service in `apps/api`.
+
+Optional movie poster enrichment uses TMDb. Without this key, the `TMDb movie posters` mode safely falls back to text cards.
+
+```powershell
+$env:TMDB_API_KEY="your_tmdb_api_key"
+```
 
 Run the API:
 

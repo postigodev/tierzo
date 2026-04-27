@@ -14,6 +14,8 @@ class PackItem:
     asset_kind: str
     width: int
     height: int
+    source_url: str | None = None
+    confidence: float | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)

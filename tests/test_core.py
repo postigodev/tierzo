@@ -8,7 +8,7 @@ from pathlib import Path
 from tierzo.export import generate_pack, zip_pack
 from tierzo.filenames import image_filename, slugify
 from tierzo.parsers import parse_csv_file, parse_text_lines
-from tierzo.presets import get_preset
+from tierzo.presets import PRESETS, get_preset
 
 
 TMP_ROOT = Path(".tierzo") / "test-tmp"
@@ -62,6 +62,10 @@ class TierzoCoreTests(unittest.TestCase):
         self.assertEqual(manifest_data["title"], "Smoke Pack")
         self.assertEqual(manifest_data["description"], "A smoke pack")
         self.assertEqual(manifest_data["items"][0]["filename"], "001-mario.png")
+
+    def test_opinionated_presets_are_available(self) -> None:
+        for name in ["hero-hud", "mono-soul", "creature-dex", "cyber-mint", "blood-moon"]:
+            self.assertIn(name, PRESETS)
 
     def test_zip_pack_writes_archive(self) -> None:
         tmp = temporary_workspace()

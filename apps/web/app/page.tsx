@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import type { DragEvent, MouseEvent } from "react";
+import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 type PackItem = {
@@ -21,9 +21,11 @@ type PackResponse = {
   manifest_url: string;
   zip_url: string;
   extension_url: string;
+  enrichment_status: string;
 };
 
-const API_BASE = process.env.NEXT_PUBLIC_TIERZO_API_URL ?? "http://localhost:8000";
+const API_BASE =
+  process.env.NEXT_PUBLIC_TIERZO_API_URL ?? "http://localhost:8000";
 
 const SAMPLE_LIST = `Silent Hill 2
 Resident Evil 4
@@ -34,7 +36,165 @@ Siren
 Haunting Ground
 Clock Tower 3`;
 
-const PRESETS = ["arcade", "clean", "dark", "bubblegum"];
+type CardStyle = {
+  background: string;
+  textColor: string;
+  accentColor: string;
+  fontKey: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  textShadow: boolean;
+  backgroundOpacity: number;
+  borderWidth: number;
+  cornerRadius: number;
+  glowBlur: number;
+};
+
+const BASE_CARD_STYLE = {
+  bold: true,
+  italic: false,
+  underline: false,
+  strike: false,
+  textShadow: false,
+  backgroundOpacity: 100,
+  borderWidth: 4,
+  cornerRadius: 8,
+  glowBlur: 0,
+};
+const PRESET_STYLES: Record<string, CardStyle> = {
+  arcade: {
+    ...BASE_CARD_STYLE,
+    background: "#101820",
+    textColor: "#FEE715",
+    accentColor: "#FEE715",
+    fontKey: "default",
+  },
+  clean: {
+    ...BASE_CARD_STYLE,
+    background: "#FFFFFF",
+    textColor: "#111111",
+    accentColor: "#DADADA",
+    fontKey: "default",
+    borderWidth: 2,
+  },
+  dark: {
+    ...BASE_CARD_STYLE,
+    background: "#111111",
+    textColor: "#FFFFFF",
+    accentColor: "#4B5563",
+    fontKey: "default",
+    textShadow: true,
+  },
+  bubblegum: {
+    ...BASE_CARD_STYLE,
+    background: "#FDE7F3",
+    textColor: "#241623",
+    accentColor: "#FF4F9A",
+    fontKey: "comic",
+    cornerRadius: 18,
+  },
+  "hero-hud": {
+    ...BASE_CARD_STYLE,
+    background: "#F2F0E8",
+    textColor: "#1E2633",
+    accentColor: "#F59E0B",
+    fontKey: "impact",
+    italic: true,
+    glowBlur: 8,
+  },
+  "mono-soul": {
+    ...BASE_CARD_STYLE,
+    background: "#050505",
+    textColor: "#FFFFFF",
+    accentColor: "#FF2E49",
+    fontKey: "consolas",
+    borderWidth: 3,
+    textShadow: true,
+  },
+  "creature-dex": {
+    ...BASE_CARD_STYLE,
+    background: "#2B6DE8",
+    textColor: "#FFF6A8",
+    accentColor: "#FFCB05",
+    fontKey: "trebuchet",
+    cornerRadius: 14,
+    glowBlur: 6,
+  },
+  "cyber-mint": {
+    ...BASE_CARD_STYLE,
+    background: "#071E22",
+    textColor: "#D8FFF3",
+    accentColor: "#25F4C8",
+    fontKey: "bahnschrift",
+    backgroundOpacity: 88,
+    glowBlur: 16,
+    textShadow: true,
+  },
+  "blood-moon": {
+    ...BASE_CARD_STYLE,
+    background: "#21070A",
+    textColor: "#FFE8D6",
+    accentColor: "#D72638",
+    fontKey: "georgia",
+    cornerRadius: 4,
+    glowBlur: 10,
+  },
+};
+const PRESETS = Object.keys(PRESET_STYLES);
+const FONT_OPTIONS = [
+  {
+    css: "Arial, Helvetica, sans-serif",
+    label: "Arial / Default",
+    value: "default",
+  },
+  {
+    css: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
+    label: "Impact",
+    value: "impact",
+  },
+  {
+    css: "Consolas, 'Courier New', monospace",
+    label: "Consolas Bold",
+    value: "consolas",
+  },
+  {
+    css: "'Trebuchet MS', Verdana, sans-serif",
+    label: "Trebuchet MS Bold",
+    value: "trebuchet",
+  },
+  {
+    css: "Bahnschrift, 'Arial Narrow', sans-serif",
+    label: "Bahnschrift",
+    value: "bahnschrift",
+  },
+  {
+    css: "Georgia, 'Times New Roman', serif",
+    label: "Georgia Bold",
+    value: "georgia",
+  },
+  {
+    css: "'Comic Sans MS', 'Comic Sans', cursive",
+    label: "Comic Sans Bold",
+    value: "comic",
+  },
+  {
+    css: "Verdana, Geneva, sans-serif",
+    label: "Verdana Bold",
+    value: "verdana",
+  },
+];
+const FONT_STACKS = Object.fromEntries(
+  FONT_OPTIONS.map((option) => [option.value, option.css]),
+);
+const LEGACY_FONT_KEYS: Record<string, string> = {
+  condensed: "bahnschrift",
+  mono: "consolas",
+  rounded: "trebuchet",
+  "sans-serif": "default",
+  serif: "georgia",
+};
 const MAX_TIERS = 10;
 const DEFAULT_TIERS = [
   { id: "tier-s", label: "S" },
@@ -62,13 +222,26 @@ type SavedDemoState = {
   title: string;
   description: string;
   preset: string;
+  cardStyle: CardStyle;
+  enrichmentMode: string;
   tiers: TierRow[];
   board: BoardState;
   pack: PackResponse | null;
 };
 
 const BOARD_STORAGE_KEY = "tierzo.demo.v1";
-const TIER_COLORS = ["#ff747a", "#ffc07a", "#ffe082", "#ffff72", "#b8ff6f", "#ff747a", "#ffc07a", "#ffe082", "#ffff72", "#b8ff6f"];
+const TIER_COLORS = [
+  "#ff747a",
+  "#ffc07a",
+  "#ffe082",
+  "#ffff72",
+  "#b8ff6f",
+  "#ff747a",
+  "#ffc07a",
+  "#ffe082",
+  "#ffff72",
+  "#b8ff6f",
+];
 
 function apiUrl(path: string) {
   return `${API_BASE}${path}`;
@@ -86,6 +259,8 @@ export default function Home() {
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [preset, setPreset] = useState("arcade");
+  const [enrichmentMode, setEnrichmentMode] = useState("text");
+  const [cardStyle, setCardStyle] = useState<CardStyle>(PRESET_STYLES.arcade);
   const [pack, setPack] = useState<PackResponse | null>(null);
   const [board, setBoard] = useState<BoardState>({});
   const [error, setError] = useState<string | null>(null);
@@ -105,6 +280,34 @@ export default function Home() {
       if (parsed.title) setTitle(parsed.title);
       setDescription(parsed.description ?? "");
       if (parsed.preset) setPreset(parsed.preset);
+      if (parsed.enrichmentMode) setEnrichmentMode(parsed.enrichmentMode);
+      if (parsed.cardStyle) {
+        const savedStyle = parsed.cardStyle as CardStyle & {
+          fontFamily?: string;
+        };
+        const savedFontKey =
+          savedStyle.fontKey ??
+          (savedStyle.fontFamily
+            ? LEGACY_FONT_KEYS[savedStyle.fontFamily]
+            : undefined) ??
+          "default";
+        setCardStyle({
+          ...BASE_CARD_STYLE,
+          background: savedStyle.background,
+          textColor: savedStyle.textColor,
+          accentColor: savedStyle.accentColor,
+          fontKey: savedFontKey,
+          bold: savedStyle.bold ?? true,
+          italic: savedStyle.italic ?? false,
+          underline: savedStyle.underline ?? false,
+          strike: savedStyle.strike ?? false,
+          textShadow: savedStyle.textShadow ?? false,
+          backgroundOpacity: savedStyle.backgroundOpacity ?? 100,
+          borderWidth: savedStyle.borderWidth ?? 4,
+          cornerRadius: savedStyle.cornerRadius ?? 8,
+          glowBlur: savedStyle.glowBlur ?? 0,
+        });
+      }
       if (Array.isArray(parsed.tiers) && parsed.tiers.length > 0) {
         setTiers(parsed.tiers.slice(0, MAX_TIERS));
         setSelectedTierId(parsed.tiers[0].id);
@@ -122,15 +325,21 @@ export default function Home() {
       title,
       description,
       preset,
+      cardStyle,
+      enrichmentMode,
       tiers,
       board,
       pack,
     };
     window.localStorage.setItem(BOARD_STORAGE_KEY, JSON.stringify(nextState));
-  }, [board, description, pack, preset, text, tiers, title]);
+  }, [board, cardStyle, description, enrichmentMode, pack, preset, text, tiers, title]);
 
   const itemCount = useMemo(
-    () => deferredText.split(/\r?\n/).map((item) => item.trim()).filter(Boolean).length,
+    () =>
+      deferredText
+        .split(/\r?\n/)
+        .map((item) => item.trim())
+        .filter(Boolean).length,
     [deferredText],
   );
 
@@ -152,6 +361,22 @@ export default function Home() {
           title: title.trim() || "Untitled Tierzo Pack",
           description: description.trim() || null,
           row_labels: tiers.map((tier) => tier.label.trim() || "-"),
+          enrichment_mode: enrichmentMode,
+          custom_preset: {
+            background: cardStyle.background,
+            text_color: cardStyle.textColor,
+            accent_color: cardStyle.accentColor,
+            font_family: cardStyle.fontKey,
+            bold: cardStyle.bold,
+            italic: cardStyle.italic,
+            underline: cardStyle.underline,
+            strike: cardStyle.strike,
+            text_shadow: cardStyle.textShadow,
+            background_opacity: cardStyle.backgroundOpacity / 100,
+            border_width: cardStyle.borderWidth,
+            corner_radius: cardStyle.cornerRadius,
+            glow_blur: cardStyle.glowBlur,
+          },
         }),
       });
 
@@ -168,22 +393,66 @@ export default function Home() {
         [tiers[2]?.id ?? "tier-b"]: nextPack.items.slice(4, 6),
       });
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Unknown generation error.");
+      setError(
+        caught instanceof Error ? caught.message : "Unknown generation error.",
+      );
     } finally {
       setIsGenerating(false);
     }
   }
 
-  const rankedIds = new Set(Object.values(board).flat().map((item) => item.id));
-  const benchItems = pack?.items.filter((item) => !rankedIds.has(item.id)) ?? [];
-  const selectedTierIndex = tiers.findIndex((tier) => tier.id === selectedTierId);
+  const rankedIds = new Set(
+    Object.values(board)
+      .flat()
+      .map((item) => item.id),
+  );
+  const benchItems =
+    pack?.items.filter((item) => !rankedIds.has(item.id)) ?? [];
+  const selectedTierIndex = tiers.findIndex(
+    (tier) => tier.id === selectedTierId,
+  );
 
   function updateTierLabel(id: string, label: string) {
-    setTiers((current) => current.map((tier) => (tier.id === id ? { ...tier, label } : tier)));
+    setTiers((current) =>
+      current.map((tier) => (tier.id === id ? { ...tier, label } : tier)),
+    );
   }
 
+  function selectPreset(nextPreset: string) {
+    setPreset(nextPreset);
+    setCardStyle(PRESET_STYLES[nextPreset] ?? PRESET_STYLES.arcade);
+  }
+
+  function updateCardStyle(nextStyle: Partial<CardStyle>) {
+    setCardStyle((current) => ({ ...current, ...nextStyle }));
+  }
+
+  const cardLabStyle = {
+    "--card-bg": hexToRgba(
+      cardStyle.background,
+      cardStyle.backgroundOpacity / 100,
+    ),
+    "--card-text": cardStyle.textColor,
+    "--card-accent": cardStyle.accentColor,
+    "--card-font": FONT_STACKS[cardStyle.fontKey],
+    "--card-border-width": `${cardStyle.borderWidth}px`,
+    "--card-radius": `${cardStyle.cornerRadius}px`,
+    "--card-glow":
+      cardStyle.glowBlur > 0
+        ? `0 0 ${cardStyle.glowBlur}px ${cardStyle.accentColor}`
+        : "none",
+    "--card-text-shadow": cardStyle.textShadow
+      ? "0 2px 0 rgba(0, 0, 0, 0.45)"
+      : "none",
+    "--card-font-style": cardStyle.italic ? "italic" : "normal",
+    "--card-font-weight": cardStyle.bold ? "900" : "500",
+    "--card-decoration": textDecoration(cardStyle),
+  } as CSSProperties;
+
   function makeTierLabel(position: number) {
-    return position < 5 ? ["S", "A", "B", "C", "D"][position] : `Row ${position + 1}`;
+    return position < 5
+      ? ["S", "A", "B", "C", "D"][position]
+      : `Row ${position + 1}`;
   }
 
   function insertTier(offset: 0 | 1) {
@@ -191,14 +460,19 @@ export default function Home() {
       return;
     }
 
-    const anchorIndex = selectedTierIndex >= 0 ? selectedTierIndex : tiers.length - 1;
+    const anchorIndex =
+      selectedTierIndex >= 0 ? selectedTierIndex : tiers.length - 1;
     const insertAt = anchorIndex + offset;
     const newTier: TierRow = {
       id: `tier-${Date.now()}-${Math.random().toString(16).slice(2)}`,
       label: makeTierLabel(tiers.length),
     };
 
-    setTiers((current) => [...current.slice(0, insertAt), newTier, ...current.slice(insertAt)]);
+    setTiers((current) => [
+      ...current.slice(0, insertAt),
+      newTier,
+      ...current.slice(insertAt),
+    ]);
     setSelectedTierId(newTier.id);
     setRowMenu(null);
   }
@@ -209,13 +483,17 @@ export default function Home() {
     }
 
     const removed = tiers[selectedTierIndex];
-    const nextSelected = tiers[selectedTierIndex + 1] ?? tiers[selectedTierIndex - 1];
+    const nextSelected =
+      tiers[selectedTierIndex + 1] ?? tiers[selectedTierIndex - 1];
 
     setTiers((current) => current.filter((tier) => tier.id !== removed.id));
     setBoard((current) => {
       const { [removed.id]: removedItems = [], ...rest } = current;
       if (removedItems.length > 0 && nextSelected) {
-        rest[nextSelected.id] = [...(rest[nextSelected.id] ?? []), ...removedItems];
+        rest[nextSelected.id] = [
+          ...(rest[nextSelected.id] ?? []),
+          ...removedItems,
+        ];
       }
       return rest;
     });
@@ -235,7 +513,9 @@ export default function Home() {
     }
 
     setTiers((current) => {
-      const draggedIndex = current.findIndex((tier) => tier.id === draggedTierId);
+      const draggedIndex = current.findIndex(
+        (tier) => tier.id === draggedTierId,
+      );
       const targetIndex = current.findIndex((tier) => tier.id === targetTierId);
       if (draggedIndex < 0 || targetIndex < 0) {
         return current;
@@ -250,7 +530,11 @@ export default function Home() {
     setDragOverTierId(null);
   }
 
-  function moveItemToTier(itemId: string, targetTierId: string, beforeItemId?: string) {
+  function moveItemToTier(
+    itemId: string,
+    targetTierId: string,
+    beforeItemId?: string,
+  ) {
     const item = pack?.items.find((candidate) => candidate.id === itemId);
     if (!item) {
       return;
@@ -263,7 +547,9 @@ export default function Home() {
       }
 
       const targetItems = [...(next[targetTierId] ?? [])];
-      const insertAt = beforeItemId ? targetItems.findIndex((candidate) => candidate.id === beforeItemId) : -1;
+      const insertAt = beforeItemId
+        ? targetItems.findIndex((candidate) => candidate.id === beforeItemId)
+        : -1;
       if (insertAt >= 0) {
         targetItems.splice(insertAt, 0, item);
       } else {
@@ -274,6 +560,7 @@ export default function Home() {
     });
     setDraggedItemId(null);
     setDragOverItemId(null);
+    setDragOverTierId(null);
   }
 
   function moveItemToBench(itemId: string) {
@@ -286,6 +573,7 @@ export default function Home() {
     });
     setDraggedItemId(null);
     setDragOverItemId(null);
+    setDragOverTierId(null);
   }
 
   async function exportBoardPng() {
@@ -306,7 +594,11 @@ export default function Home() {
       link.download = `${slugify(title || pack.title)}-tierzo-board.png`;
       link.click();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Could not export this board.");
+      setError(
+        caught instanceof Error
+          ? caught.message
+          : "Could not export this board.",
+      );
     } finally {
       setIsExporting(false);
     }
@@ -324,7 +616,12 @@ export default function Home() {
           <span />
           <span />
         </div>
-        <a className="community-link" href="https://tiermaker.com/" rel="noreferrer" target="_blank">
+        <a
+          className="community-link"
+          href="https://tiermaker.com/"
+          rel="noreferrer"
+          target="_blank"
+        >
           Explore Community Tier Lists
         </a>
       </nav>
@@ -348,11 +645,16 @@ export default function Home() {
 
       <section className="maker-panel" aria-label="Tierzo tier list demo">
         <div className="preview-head">
-          <div>
+          <div className="source-list-panel">
             <h2>{title} preview</h2>
           </div>
           <div className="preview-actions">
-            <button className="download" type="button" onClick={exportBoardPng} disabled={!pack || isExporting}>
+            <button
+              className="download"
+              type="button"
+              onClick={exportBoardPng}
+              disabled={!pack || isExporting}
+            >
               {isExporting ? "Exporting..." : "Export PNG"}
             </button>
             {pack ? (
@@ -375,7 +677,11 @@ export default function Home() {
                 event.preventDefault();
                 setDragOverTierId(tier.id);
               }}
-              onDragLeave={() => setDragOverTierId((current) => (current === tier.id ? null : current))}
+              onDragLeave={() =>
+                setDragOverTierId((current) =>
+                  current === tier.id ? null : current,
+                )
+              }
               onDrop={(event) => {
                 event.preventDefault();
                 if (draggedItemId) {
@@ -412,7 +718,10 @@ export default function Home() {
                   suppressContentEditableWarning
                   onFocus={() => setSelectedTierId(tier.id)}
                   onInput={(event) => {
-                    updateTierLabel(tier.id, event.currentTarget.textContent ?? "");
+                    updateTierLabel(
+                      tier.id,
+                      event.currentTarget.textContent ?? "",
+                    );
                   }}
                   onKeyDown={(event) => {
                     if (event.key === "Enter" && !event.shiftKey) {
@@ -454,7 +763,9 @@ export default function Home() {
         </div>
 
         <div className="toolbar" aria-label="Tierzo actions">
-          <strong className="row-count">{tiers.length}/{MAX_TIERS}</strong>
+          <strong className="row-count">
+            {tiers.length}/{MAX_TIERS}
+          </strong>
         </div>
 
         <div className="bench">
@@ -502,20 +813,25 @@ export default function Home() {
         </div>
 
         <div className="source-tray">
-          <div className="source-copy">
-            <span>Source list</span>
-            <strong>{itemCount} items</strong>
+          <div>
+            <div className="source-copy">
+              <span>Source list</span>
+              <strong>{itemCount} items</strong>
+            </div>
+            <textarea
+              id="items"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              spellCheck={false}
+            />
           </div>
-          <textarea
-            id="items"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            spellCheck={false}
-          />
           <div className="source-actions">
             <label>
               Preset
-              <select value={preset} onChange={(event) => setPreset(event.target.value)}>
+              <select
+                value={preset}
+                onChange={(event) => selectPreset(event.target.value)}
+              >
                 {PRESETS.map((name) => (
                   <option key={name} value={name}>
                     {name}
@@ -523,7 +839,164 @@ export default function Home() {
                 ))}
               </select>
             </label>
-            <button type="button" onClick={generatePack} disabled={isGenerating || itemCount === 0}>
+            <label>
+              Enrichment
+              <select
+                value={enrichmentMode}
+                onChange={(event) => setEnrichmentMode(event.target.value)}
+              >
+                <option value="text">Text cards</option>
+                <option value="tmdb_movie">TMDb movie posters</option>
+              </select>
+            </label>
+            <div className="card-lab" aria-label="Card Lab">
+              <div className="card-lab-preview" style={cardLabStyle}>
+                <span>Card Lab</span>
+              </div>
+              <div className="style-toggles" aria-label="Text style toggles">
+                <button
+                  type="button"
+                  className={cardStyle.bold ? "active" : ""}
+                  onClick={() => updateCardStyle({ bold: !cardStyle.bold })}
+                >
+                  B
+                </button>
+                <button
+                  type="button"
+                  className={cardStyle.italic ? "active" : ""}
+                  onClick={() => updateCardStyle({ italic: !cardStyle.italic })}
+                >
+                  I
+                </button>
+                <button
+                  type="button"
+                  className={cardStyle.underline ? "active" : ""}
+                  onClick={() =>
+                    updateCardStyle({ underline: !cardStyle.underline })
+                  }
+                >
+                  U
+                </button>
+                <button
+                  type="button"
+                  className={cardStyle.strike ? "active" : ""}
+                  onClick={() => updateCardStyle({ strike: !cardStyle.strike })}
+                >
+                  S
+                </button>
+                <button
+                  type="button"
+                  className={cardStyle.textShadow ? "active" : ""}
+                  onClick={() =>
+                    updateCardStyle({ textShadow: !cardStyle.textShadow })
+                  }
+                >
+                  Shadow
+                </button>
+              </div>
+              <label>
+                Background
+                <input
+                  type="color"
+                  value={cardStyle.background}
+                  onChange={(event) =>
+                    updateCardStyle({ background: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Text
+                <input
+                  type="color"
+                  value={cardStyle.textColor}
+                  onChange={(event) =>
+                    updateCardStyle({ textColor: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Accent
+                <input
+                  type="color"
+                  value={cardStyle.accentColor}
+                  onChange={(event) =>
+                    updateCardStyle({ accentColor: event.target.value })
+                  }
+                />
+              </label>
+              <label>
+                Font
+                <select
+                  value={cardStyle.fontKey}
+                  onChange={(event) =>
+                    updateCardStyle({ fontKey: event.target.value })
+                  }
+                >
+                  {FONT_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label>
+                Opacity <strong>{cardStyle.backgroundOpacity}%</strong>
+                <input
+                  type="range"
+                  min="20"
+                  max="100"
+                  value={cardStyle.backgroundOpacity}
+                  onChange={(event) =>
+                    updateCardStyle({
+                      backgroundOpacity: Number(event.target.value),
+                    })
+                  }
+                />
+              </label>
+              <label>
+                Glow <strong>{cardStyle.glowBlur}px</strong>
+                <input
+                  type="range"
+                  min="0"
+                  max="32"
+                  value={cardStyle.glowBlur}
+                  onChange={(event) =>
+                    updateCardStyle({ glowBlur: Number(event.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Border <strong>{cardStyle.borderWidth}px</strong>
+                <input
+                  type="range"
+                  min="0"
+                  max="16"
+                  value={cardStyle.borderWidth}
+                  onChange={(event) =>
+                    updateCardStyle({ borderWidth: Number(event.target.value) })
+                  }
+                />
+              </label>
+              <label>
+                Radius <strong>{cardStyle.cornerRadius}px</strong>
+                <input
+                  type="range"
+                  min="0"
+                  max="48"
+                  value={cardStyle.cornerRadius}
+                  onChange={(event) =>
+                    updateCardStyle({
+                      cornerRadius: Number(event.target.value),
+                    })
+                  }
+                />
+              </label>
+            </div>
+            <button
+              type="button"
+              onClick={generatePack}
+              disabled={isGenerating || itemCount === 0}
+            >
               {isGenerating ? "Generating..." : "Generate pack"}
             </button>
             {pack ? (
@@ -537,6 +1010,7 @@ export default function Home() {
               </a>
             ) : null}
             {error ? <p className="error">{error}</p> : null}
+            {pack ? <p className="enrichment-status">{pack.enrichment_status}</p> : null}
           </div>
         </div>
 
@@ -547,13 +1021,28 @@ export default function Home() {
             onClick={(event) => event.stopPropagation()}
             role="menu"
           >
-            <button role="menuitem" type="button" onClick={() => insertTier(0)} disabled={tiers.length >= MAX_TIERS}>
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => insertTier(0)}
+              disabled={tiers.length >= MAX_TIERS}
+            >
               Add row above
             </button>
-            <button role="menuitem" type="button" onClick={() => insertTier(1)} disabled={tiers.length >= MAX_TIERS}>
+            <button
+              role="menuitem"
+              type="button"
+              onClick={() => insertTier(1)}
+              disabled={tiers.length >= MAX_TIERS}
+            >
               Add row below
             </button>
-            <button role="menuitem" type="button" onClick={deleteSelectedTier} disabled={tiers.length <= 1}>
+            <button
+              role="menuitem"
+              type="button"
+              onClick={deleteSelectedTier}
+              disabled={tiers.length <= 1}
+            >
               Delete row
             </button>
           </div>
@@ -591,13 +1080,27 @@ function Card({
       }}
       onDrop={onDrop}
     >
-      <Image src={apiUrl(item.image_url)} alt="" width={86} height={86} unoptimized />
+      <Image
+        src={apiUrl(item.image_url)}
+        alt=""
+        width={86}
+        height={86}
+        unoptimized
+      />
       <figcaption>{item.name}</figcaption>
     </figure>
   );
 }
 
-async function renderBoardPng({ board, tiers, title }: { board: BoardState; tiers: TierRow[]; title: string }) {
+async function renderBoardPng({
+  board,
+  tiers,
+  title,
+}: {
+  board: BoardState;
+  tiers: TierRow[];
+  title: string;
+}) {
   const width = 1200;
   const labelWidth = 118;
   const rowMinHeight = 132;
@@ -607,13 +1110,24 @@ async function renderBoardPng({ board, tiers, title }: { board: BoardState; tier
   const titleHeight = 86;
   const footerHeight = 34;
   const contentWidth = width - labelWidth;
-  const cardsPerRow = Math.max(1, Math.floor((contentWidth - itemPadding * 2 + cardGap) / (cardSize + cardGap)));
+  const cardsPerRow = Math.max(
+    1,
+    Math.floor(
+      (contentWidth - itemPadding * 2 + cardGap) / (cardSize + cardGap),
+    ),
+  );
   const rowHeights = tiers.map((tier) => {
     const itemCount = board[tier.id]?.length ?? 0;
     const rows = Math.max(1, Math.ceil(itemCount / cardsPerRow));
-    return Math.max(rowMinHeight, itemPadding * 2 + rows * cardSize + (rows - 1) * cardGap);
+    return Math.max(
+      rowMinHeight,
+      itemPadding * 2 + rows * cardSize + (rows - 1) * cardGap,
+    );
   });
-  const height = titleHeight + rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0) + footerHeight;
+  const height =
+    titleHeight +
+    rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0) +
+    footerHeight;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
@@ -644,7 +1158,17 @@ async function renderBoardPng({ board, tiers, title }: { board: BoardState; tier
     context.strokeStyle = "#050505";
     context.strokeRect(0, y, labelWidth, rowHeight);
 
-    drawWrappedText(context, tier.label || "-", labelWidth / 2, y + rowHeight / 2, labelWidth - 26, 26, "#000", "800 24px Arial, Helvetica, sans-serif", "center");
+    drawWrappedText(
+      context,
+      tier.label || "-",
+      labelWidth / 2,
+      y + rowHeight / 2,
+      labelWidth - 26,
+      26,
+      "#000",
+      "800 24px Arial, Helvetica, sans-serif",
+      "center",
+    );
 
     const items = board[tier.id] ?? [];
     for (const [itemIndex, item] of items.entries()) {
@@ -715,7 +1239,11 @@ function drawWrappedText(
   }
 }
 
-function splitLongWord(context: CanvasRenderingContext2D, word: string, maxWidth: number) {
+function splitLongWord(
+  context: CanvasRenderingContext2D,
+  word: string,
+  maxWidth: number,
+) {
   const chunks: string[] = [];
   let currentChunk = "";
   for (const character of word) {
@@ -744,9 +1272,25 @@ function loadImage(src: string) {
 }
 
 function slugify(value: string) {
-  return value
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/(^-|-$)/g, "")
-    || "tierzo";
+  return (
+    value
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/(^-|-$)/g, "") || "tierzo"
+  );
+}
+
+function textDecoration(style: CardStyle) {
+  const decorations = [];
+  if (style.underline) decorations.push("underline");
+  if (style.strike) decorations.push("line-through");
+  return decorations.length > 0 ? decorations.join(" ") : "none";
+}
+
+function hexToRgba(hex: string, opacity: number) {
+  const normalized = hex.replace("#", "");
+  const red = Number.parseInt(normalized.slice(0, 2), 16);
+  const green = Number.parseInt(normalized.slice(2, 4), 16);
+  const blue = Number.parseInt(normalized.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0.2, Math.min(1, opacity))})`;
 }

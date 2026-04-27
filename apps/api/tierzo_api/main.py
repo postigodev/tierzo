@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shutil
 import uuid
+import os
 from pathlib import Path
 
 from fastapi import FastAPI, HTTPException, Request
@@ -10,12 +11,77 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from tierzo.export import generate_pack, zip_pack
+from tierzo.enrichers import TmdbMovieEnricher
 from tierzo.parsers import parse_text_lines
-from tierzo.presets import PRESETS, get_preset
+from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 STORAGE_DIR = ROOT_DIR / ".tierzo" / "storage"
+FONT_PATHS = {
+    "default": None,
+    "impact": Path("C:/Windows/Fonts/impact.ttf"),
+    "consolas": Path("C:/Windows/Fonts/consolab.ttf"),
+    "trebuchet": Path("C:/Windows/Fonts/trebucbd.ttf"),
+    "bahnschrift": Path("C:/Windows/Fonts/bahnschrift.ttf"),
+    "georgia": Path("C:/Windows/Fonts/georgiab.ttf"),
+    "comic": Path("C:/Windows/Fonts/comicbd.ttf"),
+    "verdana": Path("C:/Windows/Fonts/verdanab.ttf"),
+}
+FONT_VARIANTS = {
+    "default": {
+        "regular": Path("C:/Windows/Fonts/arial.ttf"),
+        "bold": Path("C:/Windows/Fonts/arialbd.ttf"),
+        "italic": Path("C:/Windows/Fonts/ariali.ttf"),
+        "bold_italic": Path("C:/Windows/Fonts/arialbi.ttf"),
+    },
+    "consolas": {
+        "regular": Path("C:/Windows/Fonts/consola.ttf"),
+        "bold": Path("C:/Windows/Fonts/consolab.ttf"),
+        "italic": Path("C:/Windows/Fonts/consolai.ttf"),
+        "bold_italic": Path("C:/Windows/Fonts/consolaz.ttf"),
+    },
+    "trebuchet": {
+        "regular": Path("C:/Windows/Fonts/trebuc.ttf"),
+        "bold": Path("C:/Windows/Fonts/trebucbd.ttf"),
+        "italic": Path("C:/Windows/Fonts/trebucit.ttf"),
+        "bold_italic": Path("C:/Windows/Fonts/trebucbi.ttf"),
+    },
+    "georgia": {
+        "regular": Path("C:/Windows/Fonts/georgia.ttf"),
+        "bold": Path("C:/Windows/Fonts/georgiab.ttf"),
+        "italic": Path("C:/Windows/Fonts/georgiai.ttf"),
+        "bold_italic": Path("C:/Windows/Fonts/georgiaz.ttf"),
+    },
+    "comic": {
+        "regular": Path("C:/Windows/Fonts/comic.ttf"),
+        "bold": Path("C:/Windows/Fonts/comicbd.ttf"),
+        "italic": Path("C:/Windows/Fonts/comici.ttf"),
+        "bold_italic": Path("C:/Windows/Fonts/comicz.ttf"),
+    },
+    "verdana": {
+        "regular": Path("C:/Windows/Fonts/verdana.ttf"),
+        "bold": Path("C:/Windows/Fonts/verdanab.ttf"),
+        "italic": Path("C:/Windows/Fonts/verdanai.ttf"),
+        "bold_italic": Path("C:/Windows/Fonts/verdanaz.ttf"),
+    },
+}
+
+
+class CardStyleRequest(BaseModel):
+    background: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    text_color: str = Field(pattern=r"^#[0-9a-fA-F]{6}$")
+    accent_color: str | None = Field(default=None, pattern=r"^#[0-9a-fA-F]{6}$")
+    font_family: str = "default"
+    bold: bool = True
+    italic: bool = False
+    underline: bool = False
+    strike: bool = False
+    text_shadow: bool = False
+    background_opacity: float = Field(default=1.0, ge=0.2, le=1.0)
+    border_width: int = Field(default=4, ge=0, le=16)
+    corner_radius: int = Field(default=8, ge=0, le=48)
+    glow_blur: int = Field(default=0, ge=0, le=32)
 
 
 class GeneratePackRequest(BaseModel):
@@ -26,6 +92,8 @@ class GeneratePackRequest(BaseModel):
     title: str = "Tierzo Demo Pack"
     description: str | None = None
     row_labels: list[str] = Field(default_factory=lambda: ["S", "A", "B", "C", "D"])
+    custom_preset: CardStyleRequest | None = None
+    enrichment_mode: str = "text"
 
 
 class PackItemResponse(BaseModel):
@@ -45,6 +113,7 @@ class GeneratePackResponse(BaseModel):
     manifest_url: str
     zip_url: str
     extension_url: str
+    enrichment_status: str
 
 
 class TierMakerImagePayload(BaseModel):
@@ -97,6 +166,21 @@ def presets() -> dict[str, list[str]]:
     return {"presets": sorted(PRESETS)}
 
 
+def resolve_font_path(font_family: str, *, bold: bool, italic: bool) -> Path | None:
+    if font_family == "impact":
+        return FONT_PATHS["impact"]
+    if font_family == "bahnschrift":
+        return FONT_PATHS["bahnschrift"]
+
+    variant = "bold_italic" if bold and italic else "bold" if bold else "italic" if italic else "regular"
+    variants = FONT_VARIANTS.get(font_family)
+    if variants:
+        path = variants.get(variant)
+        if path and path.exists():
+            return path
+    return FONT_PATHS.get(font_family)
+
+
 @app.post("/packs", response_model=GeneratePackResponse)
 def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
     values = parse_text_lines(payload.text)
@@ -108,12 +192,48 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+    if payload.custom_preset:
+        preset = TextCardPreset(
+            name=f"custom:{payload.preset}",
+            background=payload.custom_preset.background,
+            text_color=payload.custom_preset.text_color,
+            accent_color=payload.custom_preset.accent_color,
+            font_path=resolve_font_path(
+                payload.custom_preset.font_family,
+                bold=payload.custom_preset.bold,
+                italic=payload.custom_preset.italic,
+            ),
+            font_label=payload.custom_preset.font_family,
+            background_opacity=payload.custom_preset.background_opacity,
+            border_width=payload.custom_preset.border_width,
+            corner_radius=payload.custom_preset.corner_radius,
+            glow_blur=payload.custom_preset.glow_blur,
+            italic=payload.custom_preset.italic,
+            underline=payload.custom_preset.underline,
+            strike=payload.custom_preset.strike,
+            text_shadow=payload.custom_preset.text_shadow,
+        )
+
     pack_id = uuid.uuid4().hex
     output_dir = STORAGE_DIR / pack_id
     zip_path = STORAGE_DIR / f"{pack_id}.zip"
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
+
+    enriched_assets = None
+    enrichment_status = "text"
+    if payload.enrichment_mode == "tmdb_movie":
+        api_key = os.getenv("TMDB_API_KEY")
+        if api_key:
+            try:
+                enriched_assets = TmdbMovieEnricher(api_key).enrich_many(values, output_dir / "_sources")
+                enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(values)}"
+            except Exception:
+                enriched_assets = None
+                enrichment_status = "tmdb_movie:error_fallback_text"
+        else:
+            enrichment_status = "tmdb_movie:missing_api_key_fallback_text"
 
     manifest = generate_pack(
         values,
@@ -123,9 +243,30 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
         preset=preset,
         filename_mode=payload.filename_mode,
         write_manifest=True,
+        enriched_assets=enriched_assets,
         extra_manifest={
             "description": payload.description,
             "row_labels": payload.row_labels,
+            "enrichment": {
+                "mode": payload.enrichment_mode,
+                "status": enrichment_status,
+            },
+            "card_style": {
+                "preset": payload.preset,
+                "background": preset.background,
+                "text_color": preset.text_color,
+                "accent_color": preset.accent_color,
+                "font_family": preset.font_label,
+                "bold": payload.custom_preset.bold if payload.custom_preset else True,
+                "italic": payload.custom_preset.italic if payload.custom_preset else False,
+                "underline": preset.underline,
+                "strike": preset.strike,
+                "text_shadow": preset.text_shadow,
+                "background_opacity": preset.background_opacity,
+                "border_width": preset.border_width,
+                "corner_radius": preset.corner_radius,
+                "glow_blur": preset.glow_blur,
+            },
         },
     )
     zip_pack(output_dir, zip_path)
@@ -150,6 +291,7 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
         manifest_url=f"/packs/{pack_id}/files/manifest.json",
         zip_url=f"/packs/{pack_id}/zip",
         extension_url=f"/packs/{pack_id}/tiermaker-extension.json",
+        enrichment_status=enrichment_status,
     )
 
 

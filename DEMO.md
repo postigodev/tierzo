@@ -82,6 +82,12 @@ Once one source connector exists:
 - Let users resolve ambiguity.
 - Preserve credits/source URLs.
 
+Current first connector:
+
+- TMDb movie poster mode behind `TMDB_API_KEY`.
+- Falls back to deterministic text cards when the key is missing or a match fails.
+- Stores source metadata on each manifest item.
+
 ## Visual Bar
 
 The demo output should look good enough to share as a screenshot.
@@ -177,6 +183,8 @@ Status: in progress.
 - Real images.
 - Human review for ambiguous matches.
 - Credits in manifest.
+
+Status: started with TMDb movie poster enrichment.
 
 ## Collaboration Rule
 

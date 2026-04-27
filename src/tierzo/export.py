@@ -5,9 +5,10 @@ import zipfile
 from pathlib import Path
 
 from .filenames import image_filename
+from .enrichers import EnrichedAsset
 from .models import PackItem, PackManifest
 from .presets import TextCardPreset
-from .rendering import draw_centered_text
+from .rendering import draw_centered_text, draw_image_card
 
 
 def generate_pack(
@@ -20,6 +21,7 @@ def generate_pack(
     filename_mode: str,
     write_manifest: bool,
     extra_manifest: dict[str, object] | None = None,
+    enriched_assets: dict[str, EnrichedAsset] | None = None,
 ) -> PackManifest:
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -28,7 +30,17 @@ def generate_pack(
     for index, text in enumerate(values, start=1):
         filename = image_filename(index, total, text, filename_mode)
         output_path = output_dir / filename
-        draw_centered_text(text=text, output_path=output_path, image_size=size, preset=preset)
+        enriched_asset = (enriched_assets or {}).get(text)
+        if enriched_asset:
+            draw_image_card(
+                enriched_asset.image_path,
+                output_path,
+                size,
+                background=preset.background,
+                accent_color=preset.accent_color,
+            )
+        else:
+            draw_centered_text(text=text, output_path=output_path, image_size=size, preset=preset)
 
         items.append(
             PackItem(
@@ -36,9 +48,11 @@ def generate_pack(
                 name=text,
                 filename=filename,
                 status="ready",
-                source_type="input",
-                source_value=None,
-                asset_kind="text-card",
+                source_type=enriched_asset.source_type if enriched_asset else "input",
+                source_value=enriched_asset.source_value if enriched_asset else None,
+                source_url=enriched_asset.source_url if enriched_asset else None,
+                asset_kind="image-card" if enriched_asset else "text-card",
+                confidence=enriched_asset.confidence if enriched_asset else None,
                 width=size,
                 height=size,
             )

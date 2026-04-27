@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageColor, ImageDraw, ImageFilter, ImageFont, ImageOps
 
 from .presets import TextCardPreset
 
@@ -12,10 +12,12 @@ DEFAULT_PADDING_RATIO = 0.1
 DEFAULT_FONT_SIZE = 180
 MIN_FONT_SIZE = 20
 LINE_SPACING_RATIO = 0.2
+BACKGROUND_MATTE = "#050505"
+ITALIC_SHEAR = 0.22
 
 
 def get_font(font_path: Path | None, size: int) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
-    if font_path:
+    if font_path and font_path.exists():
         return ImageFont.truetype(str(font_path), size=size)
 
     common_fonts = [
@@ -112,7 +114,22 @@ def draw_centered_text(
     image_size: int,
     preset: TextCardPreset,
 ) -> None:
-    image = Image.new("RGB", (image_size, image_size), preset.background)
+    background = blend_with_matte(preset.background, preset.background_opacity)
+    image = Image.new("RGB", (image_size, image_size), background)
+
+    if preset.accent_color and preset.glow_blur > 0:
+        glow = Image.new("RGBA", (image_size, image_size), (0, 0, 0, 0))
+        glow_draw = ImageDraw.Draw(glow)
+        inset = max(12, image_size // 48)
+        glow_draw.rounded_rectangle(
+            (inset, inset, image_size - inset, image_size - inset),
+            radius=max(8, preset.corner_radius * image_size // 96),
+            outline=hex_to_rgba(preset.accent_color, 170),
+            width=max(4, preset.border_width * image_size // 128),
+        )
+        glow = glow.filter(ImageFilter.GaussianBlur(radius=max(1, preset.glow_blur * image_size // 256)))
+        image = Image.alpha_composite(image.convert("RGBA"), glow).convert("RGB")
+
     draw = ImageDraw.Draw(image)
     font, lines = fit_text_to_box(image_size, text, preset.font_path)
 
@@ -128,20 +145,146 @@ def draw_centered_text(
     line_spacing = max(4, int(line_height * LINE_SPACING_RATIO))
     block_height = sum(line_heights) + max(0, len(lines) - 1) * line_spacing
 
-    if preset.accent_color:
+    if preset.accent_color and preset.border_width > 0:
         inset = max(12, image_size // 48)
         draw.rounded_rectangle(
             (inset, inset, image_size - inset, image_size - inset),
-            radius=max(8, image_size // 48),
+            radius=max(0, preset.corner_radius * image_size // 96),
             outline=preset.accent_color,
-            width=max(4, image_size // 128),
+            width=max(1, preset.border_width * image_size // 128),
         )
 
+    image = image.convert("RGBA")
     y = (image_size - block_height) / 2
     for index, line in enumerate(lines):
         width = widths[index]
         x = (image_size - width) / 2
-        draw.text((x, y), line, font=font, fill=preset.text_color)
+        if preset.text_shadow:
+            shadow_offset = max(2, image_size // 128)
+            draw_text_layer(
+                image,
+                line,
+                font,
+                (x + shadow_offset, y + shadow_offset),
+                fill=shadow_color(preset.background),
+                italic=preset.italic,
+                underline=preset.underline,
+                strike=preset.strike,
+                image_size=image_size,
+            )
+        draw_text_layer(
+            image,
+            line,
+            font,
+            (x, y),
+            fill=preset.text_color,
+            italic=preset.italic,
+            underline=preset.underline,
+            strike=preset.strike,
+            image_size=image_size,
+        )
         y += line_heights[index] + line_spacing
 
+    image.convert("RGB").save(output_path, format="PNG")
+
+
+def draw_image_card(
+    source_path: Path,
+    output_path: Path,
+    image_size: int,
+    *,
+    background: str = "#050505",
+    accent_color: str | None = None,
+) -> None:
+    with Image.open(source_path) as source:
+        image = ImageOps.fit(source.convert("RGB"), (image_size, image_size), method=Image.Resampling.LANCZOS)
+
+    if accent_color:
+        draw = ImageDraw.Draw(image)
+        inset = max(6, image_size // 80)
+        draw.rounded_rectangle(
+            (inset, inset, image_size - inset, image_size - inset),
+            radius=max(8, image_size // 32),
+            outline=accent_color,
+            width=max(3, image_size // 128),
+        )
+    elif background:
+        canvas = Image.new("RGB", (image_size, image_size), background)
+        canvas.paste(image)
+        image = canvas
+
     image.save(output_path, format="PNG")
+
+
+def draw_text_layer(
+    image: Image.Image,
+    text: str,
+    font: ImageFont.ImageFont,
+    position: tuple[float, float],
+    *,
+    fill: str,
+    italic: bool,
+    underline: bool,
+    strike: bool,
+    image_size: int,
+) -> None:
+    probe = Image.new("RGBA", (1, 1), (0, 0, 0, 0))
+    probe_draw = ImageDraw.Draw(probe)
+    left, top, right, bottom = probe_draw.textbbox((0, 0), text or " ", font=font)
+    width = max(1, right - left)
+    height = max(1, bottom - top)
+    padding = max(6, image_size // 96)
+    layer = Image.new("RGBA", (width + padding * 2, height + padding * 3), (0, 0, 0, 0))
+    layer_draw = ImageDraw.Draw(layer)
+    text_x = padding - left
+    text_y = padding - top
+    layer_draw.text((text_x, text_y), text, font=font, fill=fill)
+
+    decoration_width = max(2, image_size // 160)
+    if underline:
+        underline_y = padding + height + max(2, image_size // 128)
+        layer_draw.line((padding, underline_y, padding + width, underline_y), fill=fill, width=decoration_width)
+    if strike:
+        strike_y = padding + height / 2
+        layer_draw.line((padding, strike_y, padding + width, strike_y), fill=fill, width=decoration_width)
+
+    if italic:
+        layer = shear_layer(layer)
+
+    x, y = position
+    image.alpha_composite(layer, (round(x - padding), round(y - padding)))
+
+
+def shear_layer(layer: Image.Image) -> Image.Image:
+    extra_width = max(1, round(abs(ITALIC_SHEAR) * layer.height))
+    output_width = layer.width + extra_width
+    x_offset = extra_width if ITALIC_SHEAR < 0 else 0
+    return layer.transform(
+        (output_width, layer.height),
+        Image.Transform.AFFINE,
+        (1, ITALIC_SHEAR, -x_offset, 0, 1, 0),
+        resample=Image.Resampling.BICUBIC,
+    )
+
+
+def hex_to_rgba(value: str, alpha: int) -> tuple[int, int, int, int]:
+    red, green, blue = ImageColor.getrgb(value)
+    return red, green, blue, alpha
+
+
+def blend_with_matte(value: str, opacity: float) -> str:
+    opacity = max(0.0, min(1.0, opacity))
+    red, green, blue = ImageColor.getrgb(value)
+    matte_red, matte_green, matte_blue = ImageColor.getrgb(BACKGROUND_MATTE)
+    blended = (
+        round((red * opacity) + (matte_red * (1 - opacity))),
+        round((green * opacity) + (matte_green * (1 - opacity))),
+        round((blue * opacity) + (matte_blue * (1 - opacity))),
+    )
+    return "#{:02x}{:02x}{:02x}".format(*blended)
+
+
+def shadow_color(background: str) -> str:
+    red, green, blue = ImageColor.getrgb(background)
+    brightness = (red * 299 + green * 587 + blue * 114) / 1000
+    return "#000000" if brightness > 130 else "#FFFFFF"

@@ -25,6 +25,7 @@ const tierInputCount = await page.locator(".tier-label").count();
 await page.getByLabel("Background").fill("#ff0000");
 await page.getByLabel("Text", { exact: true }).fill("#00ff00");
 await page.getByLabel("Accent").fill("#0000ff");
+await page.getByLabel("Generate mode").selectOption("text");
 await page.getByRole("button", { name: "I", exact: true }).click();
 await page.getByRole("button", { name: "Shadow" }).click();
 await page.getByRole("button", { name: /generate pack/i }).click();

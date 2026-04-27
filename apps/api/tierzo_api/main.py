@@ -3,9 +3,11 @@ from __future__ import annotations
 import shutil
 import uuid
 import os
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
@@ -123,6 +125,11 @@ class PackItemResponse(BaseModel):
     name: str
     filename: str
     image_url: str
+    asset_kind: str
+    source_type: str
+    source_value: str | None = None
+    source_url: str | None = None
+    confidence: float | None = None
 
 
 class GeneratePackResponse(BaseModel):
@@ -137,6 +144,35 @@ class GeneratePackResponse(BaseModel):
     extension_url: str
     enrichment_status: str
     agent_plan: dict[str, object] | None = None
+
+
+class CreateJobResponse(BaseModel):
+    job_id: str
+    status: str
+
+
+class JobStepResponse(BaseModel):
+    id: str
+    label: str
+    status: str
+    detail: str | None = None
+
+
+class JobResponse(BaseModel):
+    job_id: str
+    status: str
+    steps: list[JobStepResponse]
+    pack: GeneratePackResponse | None = None
+    error: str | None = None
+
+
+@dataclass
+class JobRecord:
+    job_id: str
+    status: str = "queued"
+    steps: list[JobStepResponse] = field(default_factory=list)
+    pack: GeneratePackResponse | None = None
+    error: str | None = None
 
 
 class TierMakerImagePayload(BaseModel):
@@ -178,6 +214,8 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+JOBS: dict[str, JobRecord] = {}
+
 
 @app.get("/health")
 def health() -> dict[str, object]:
@@ -208,8 +246,56 @@ def resolve_font_path(font_family: str, *, bold: bool, italic: bool) -> Path | N
     return FONT_PATHS.get(font_family)
 
 
-@app.post("/packs", response_model=GeneratePackResponse)
-def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
+def default_job_steps() -> list[JobStepResponse]:
+    return [
+        JobStepResponse(id="read", label="Read source list", status="pending"),
+        JobStepResponse(id="plan", label="Choose generation mode", status="pending"),
+        JobStepResponse(id="assets", label="Find matching assets", status="pending"),
+        JobStepResponse(id="render", label="Render cards", status="pending"),
+        JobStepResponse(id="export", label="Prepare exports", status="pending"),
+    ]
+
+
+def update_job_step(
+    job: JobRecord,
+    step_id: str,
+    status: str,
+    detail: str | None = None,
+) -> None:
+    job.steps = [
+        step.model_copy(update={"status": status, "detail": detail})
+        if step.id == step_id
+        else step
+        for step in job.steps
+    ]
+
+
+def summarize_asset_step(pack: GeneratePackResponse) -> tuple[str, str | None]:
+    if pack.enrichment_status == "text":
+        return "done", "Text-card mode selected."
+
+    match = pack.enrichment_status.removeprefix("tmdb_movie:")
+    if "/" in match:
+        matched, total = match.split("/", 1)
+        status = "done" if matched == total else "warning"
+        return status, f"Matched {matched}/{total} movie posters."
+
+    if "missing_api_key" in pack.enrichment_status:
+        return "warning", "TMDb key missing; fell back to text cards."
+
+    if "error_fallback_text" in pack.enrichment_status:
+        return "warning", "Asset lookup failed; fell back to text cards."
+
+    return "done", pack.enrichment_status
+
+
+ProgressCallback = Callable[[str, str | None], None]
+
+
+def build_pack(
+    payload: GeneratePackRequest,
+    progress_callback: ProgressCallback | None = None,
+) -> GeneratePackResponse:
     agent_plan: IntakePlan | None = None
     enrichment_mode = payload.enrichment_mode
     values = parse_text_lines(payload.text)
@@ -222,6 +308,9 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
         )
         values = agent_plan.items
         enrichment_mode = agent_plan.tool
+        if progress_callback:
+            source = "cache" if agent_plan.cache_hit else agent_plan.source
+            progress_callback("plan_done", f"Picked {agent_plan.domain} via {source}.")
 
     if not values:
         raise HTTPException(status_code=400, detail="No non-empty items found.")
@@ -266,6 +355,8 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
         api_key = os.getenv("TMDB_API_KEY")
         if api_key:
             try:
+                if progress_callback:
+                    progress_callback("assets_running", f"Searching posters for {len(values)} items.")
                 enriched_assets = TmdbMovieEnricher(api_key).enrich_many(values, output_dir / "_sources")
                 enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(values)}"
             except Exception:
@@ -273,7 +364,26 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
                 enrichment_status = "tmdb_movie:error_fallback_text"
         else:
             enrichment_status = "tmdb_movie:missing_api_key_fallback_text"
+    if progress_callback:
+        asset_status, asset_detail = summarize_asset_step(
+            GeneratePackResponse(
+                pack_id=pack_id,
+                title=payload.title,
+                description=payload.description,
+                row_labels=payload.row_labels,
+                item_count=len(values),
+                items=[],
+                manifest_url="",
+                zip_url="",
+                extension_url="",
+                enrichment_status=enrichment_status,
+                agent_plan=agent_plan.to_dict() if agent_plan else None,
+            )
+        )
+        progress_callback(f"assets_{asset_status}", asset_detail)
 
+    if progress_callback:
+        progress_callback("render_running", f"Rendering {len(values)} cards.")
     manifest = generate_pack(
         values,
         output_dir,
@@ -310,7 +420,12 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
             },
         },
     )
+    if progress_callback:
+        progress_callback("render_done", f"Rendered {len(manifest.items)} cards.")
+        progress_callback("export_running", "Writing ZIP and extension payload.")
     zip_pack(output_dir, zip_path)
+    if progress_callback:
+        progress_callback("export_done", "Manifest, ZIP, and extension JSON are ready.")
 
     items = [
         PackItemResponse(
@@ -318,6 +433,11 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
             name=item.name,
             filename=item.filename,
             image_url=f"/packs/{pack_id}/files/{item.filename}",
+            asset_kind=item.asset_kind,
+            source_type=item.source_type,
+            source_value=item.source_value,
+            source_url=item.source_url,
+            confidence=item.confidence,
         )
         for item in manifest.items
     ]
@@ -334,6 +454,111 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
         extension_url=f"/packs/{pack_id}/tiermaker-extension.json",
         enrichment_status=enrichment_status,
         agent_plan=agent_plan.to_dict() if agent_plan else None,
+    )
+
+
+@app.post("/packs", response_model=GeneratePackResponse)
+def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
+    return build_pack(payload)
+
+
+def run_generation_job(job_id: str, payload: GeneratePackRequest) -> None:
+    job = JOBS[job_id]
+    job.status = "running"
+    update_job_step(job, "read", "running")
+
+    try:
+        values = parse_text_lines(payload.text)
+        if not values:
+            raise HTTPException(status_code=400, detail="No non-empty items found.")
+
+        update_job_step(job, "read", "done", f"Found {len(values)} source items.")
+        update_job_step(job, "plan", "running")
+
+        if payload.enrichment_mode != "auto":
+            update_job_step(job, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
+
+        def on_progress(event: str, detail: str | None) -> None:
+            if event == "plan_done":
+                update_job_step(job, "plan", "done", detail)
+            elif event == "assets_running":
+                update_job_step(job, "assets", "running", detail)
+            elif event == "assets_done":
+                update_job_step(job, "assets", "done", detail)
+            elif event == "assets_warning":
+                update_job_step(job, "assets", "warning", detail)
+            elif event == "render_running":
+                update_job_step(job, "render", "running", detail)
+            elif event == "render_done":
+                update_job_step(job, "render", "done", detail)
+            elif event == "export_running":
+                update_job_step(job, "export", "running", detail)
+            elif event == "export_done":
+                update_job_step(job, "export", "done", detail)
+
+        pack = build_pack(payload, progress_callback=on_progress)
+
+        if pack.agent_plan:
+            if next(step for step in job.steps if step.id == "plan").status != "done":
+                source = "cache" if pack.agent_plan.get("cache_hit") else pack.agent_plan.get("source", "agent")
+                update_job_step(
+                    job,
+                    "plan",
+                    "done",
+                    f"Picked {pack.agent_plan.get('domain')} via {source}.",
+                )
+        else:
+            if next(step for step in job.steps if step.id == "plan").status != "done":
+                update_job_step(job, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
+
+        job.pack = pack
+        job.status = "completed"
+    except HTTPException as exc:
+        job.status = "failed"
+        job.error = str(exc.detail)
+        for step in job.steps:
+            if step.status in {"pending", "running"}:
+                update_job_step(job, step.id, "error")
+                break
+    except Exception as exc:
+        job.status = "failed"
+        job.error = "Tierzo could not generate this pack."
+        for step in job.steps:
+            if step.status in {"pending", "running"}:
+                update_job_step(job, step.id, "error", str(exc))
+                break
+
+
+def format_tool_for_step(tool: str) -> str:
+    if tool == "auto":
+        return "Auto Agent"
+    if tool == "tmdb_movie":
+        return "Movie posters"
+    return "Text cards"
+
+
+@app.post("/jobs", response_model=CreateJobResponse)
+def create_generation_job(
+    payload: GeneratePackRequest,
+    background_tasks: BackgroundTasks,
+) -> CreateJobResponse:
+    job_id = uuid.uuid4().hex
+    JOBS[job_id] = JobRecord(job_id=job_id, steps=default_job_steps())
+    background_tasks.add_task(run_generation_job, job_id, payload)
+    return CreateJobResponse(job_id=job_id, status="queued")
+
+
+@app.get("/jobs/{job_id}", response_model=JobResponse)
+def get_generation_job(job_id: str) -> JobResponse:
+    job = JOBS.get(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found.")
+    return JobResponse(
+        job_id=job.job_id,
+        status=job.status,
+        steps=job.steps,
+        pack=job.pack,
+        error=job.error,
     )
 
 

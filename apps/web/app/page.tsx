@@ -9,6 +9,11 @@ type PackItem = {
   name: string;
   filename: string;
   image_url: string;
+  asset_kind: string;
+  source_type: string;
+  source_value: string | null;
+  source_url: string | null;
+  confidence: number | null;
 };
 
 type PackResponse = {
@@ -29,6 +34,21 @@ type PackResponse = {
     source: string;
     cache_hit: boolean;
   } | null;
+};
+
+type JobStep = {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "done" | "warning" | "error";
+  detail: string | null;
+};
+
+type GenerationJob = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  steps: JobStep[];
+  pack: PackResponse | null;
+  error: string | null;
 };
 
 const API_BASE =
@@ -273,6 +293,10 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
+  const [showMatches, setShowMatches] = useState(false);
+  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(
+    null,
+  );
   const deferredText = useDeferredValue(text);
 
   useEffect(() => {
@@ -360,41 +384,68 @@ export default function Home() {
     [deferredText],
   );
 
+  function buildGeneratePayload() {
+    return {
+      text,
+      preset,
+      size: 512,
+      filename_mode: "both",
+      title: title.trim() || "Untitled Tierzo Pack",
+      description: description.trim() || null,
+      row_labels: tiers.map((tier) => tier.label.trim() || "-"),
+      enrichment_mode: enrichmentMode,
+      custom_preset: {
+        background: cardStyle.background,
+        text_color: cardStyle.textColor,
+        accent_color: cardStyle.accentColor,
+        font_family: cardStyle.fontKey,
+        bold: cardStyle.bold,
+        italic: cardStyle.italic,
+        underline: cardStyle.underline,
+        strike: cardStyle.strike,
+        text_shadow: cardStyle.textShadow,
+        background_opacity: cardStyle.backgroundOpacity / 100,
+        border_width: cardStyle.borderWidth,
+        corner_radius: cardStyle.cornerRadius,
+        glow_blur: cardStyle.glowBlur,
+      },
+    };
+  }
+
+  async function pollGenerationJob(jobId: string) {
+    for (;;) {
+      const response = await fetch(apiUrl(`/jobs/${jobId}`));
+      if (!response.ok) {
+        const body = await response.json().catch(() => null);
+        throw new Error(body?.detail ?? "Tierzo lost this generation job.");
+      }
+
+      const nextJob = (await response.json()) as GenerationJob;
+      setGenerationJob(nextJob);
+
+      if (nextJob.status === "completed" && nextJob.pack) {
+        return nextJob.pack;
+      }
+
+      if (nextJob.status === "failed") {
+        throw new Error(nextJob.error ?? "Tierzo could not generate this pack.");
+      }
+
+      await new Promise((resolve) => window.setTimeout(resolve, 650));
+    }
+  }
+
   async function generatePack() {
     setError(null);
     setIsGenerating(true);
 
     try {
-      const response = await fetch(apiUrl("/packs"), {
+      const response = await fetch(apiUrl("/jobs"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({
-          text,
-          preset,
-          size: 512,
-          filename_mode: "both",
-          title: title.trim() || "Untitled Tierzo Pack",
-          description: description.trim() || null,
-          row_labels: tiers.map((tier) => tier.label.trim() || "-"),
-          enrichment_mode: enrichmentMode,
-          custom_preset: {
-            background: cardStyle.background,
-            text_color: cardStyle.textColor,
-            accent_color: cardStyle.accentColor,
-            font_family: cardStyle.fontKey,
-            bold: cardStyle.bold,
-            italic: cardStyle.italic,
-            underline: cardStyle.underline,
-            strike: cardStyle.strike,
-            text_shadow: cardStyle.textShadow,
-            background_opacity: cardStyle.backgroundOpacity / 100,
-            border_width: cardStyle.borderWidth,
-            corner_radius: cardStyle.cornerRadius,
-            glow_blur: cardStyle.glowBlur,
-          },
-        }),
+        body: JSON.stringify(buildGeneratePayload()),
       });
 
       if (!response.ok) {
@@ -402,8 +453,21 @@ export default function Home() {
         throw new Error(body?.detail ?? "Tierzo could not generate this pack.");
       }
 
-      const nextPack = (await response.json()) as PackResponse;
+      const createdJob = (await response.json()) as {
+        job_id: string;
+        status: GenerationJob["status"];
+      };
+      setGenerationJob({
+        job_id: createdJob.job_id,
+        status: createdJob.status,
+        steps: [],
+        pack: null,
+        error: null,
+      });
+
+      const nextPack = await pollGenerationJob(createdJob.job_id);
       setPack(nextPack);
+      setShowMatches(true);
       setBoard({
         [tiers[0]?.id ?? "tier-s"]: nextPack.items.slice(0, 2),
         [tiers[1]?.id ?? "tier-a"]: nextPack.items.slice(2, 4),
@@ -859,6 +923,7 @@ export default function Home() {
             <label className="mode-label">
               <span className="mode-label-title">✦ Generate mode</span>
               <select
+                aria-label="Generate mode"
                 value={enrichmentMode}
                 onChange={(event) => setEnrichmentMode(event.target.value)}
               >
@@ -1025,6 +1090,15 @@ export default function Home() {
               {isGenerating ? "Generating..." : "Generate pack"}
             </button>
             {pack ? (
+              <button
+                className="secondary-action"
+                type="button"
+                onClick={() => setShowMatches((current) => !current)}
+              >
+                {showMatches ? "Hide matches" : "View matches"}
+              </button>
+            ) : null}
+            {pack ? (
               <a className="secondary-action" href={apiUrl(pack.manifest_url)}>
                 Manifest
               </a>
@@ -1035,6 +1109,9 @@ export default function Home() {
               </a>
             ) : null}
             {error ? <p className="error">{error}</p> : null}
+            {generationJob && generationJob.status !== "completed" ? (
+              <AgentRunPanel job={generationJob} />
+            ) : null}
             {pack ? (
               <p className="enrichment-status">{formatGenerationStatus(pack)}</p>
             ) : null}
@@ -1045,6 +1122,7 @@ export default function Home() {
                 {pack.agent_plan.cache_hit ? " from cache" : ""}
               </p>
             ) : null}
+            {pack && showMatches ? <MatchesPanel pack={pack} /> : null}
           </div>
         </div>
 
@@ -1083,6 +1161,93 @@ export default function Home() {
         ) : null}
       </section>
     </main>
+  );
+}
+
+function MatchesPanel({ pack }: { pack: PackResponse }) {
+  const matched = pack.items.filter((item) => item.asset_kind !== "text-card");
+  const fallback = pack.items.length - matched.length;
+
+  return (
+    <section className="matches-panel" aria-label="Review matches">
+      <div className="matches-head">
+        <div>
+          <strong>Review matches</strong>
+          <span>
+            {matched.length}/{pack.items.length} sourced
+            {fallback > 0 ? `, ${fallback} text fallback` : ""}
+          </span>
+        </div>
+      </div>
+      <div className="matches-list">
+        {pack.items.map((item) => (
+          <article className="match-row" key={item.id}>
+            <Image
+              src={apiUrl(item.image_url)}
+              alt=""
+              width={42}
+              height={42}
+              unoptimized
+            />
+            <div className="match-copy">
+              <strong>{item.name}</strong>
+              <span>{formatMatchSource(item)}</span>
+            </div>
+            <span className={`match-pill ${item.asset_kind}`}>
+              {formatConfidence(item)}
+            </span>
+            {item.source_url ? (
+              <a href={item.source_url} rel="noreferrer" target="_blank">
+                Source
+              </a>
+            ) : null}
+          </article>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+function AgentRunPanel({ job }: { job: GenerationJob }) {
+  const steps = job.steps.length > 0 ? job.steps : [];
+
+  return (
+    <section className="agent-run" aria-live="polite">
+      <div className="agent-run-head">
+        <div>
+          <strong>Tierzo is building your pack</strong>
+          <span>{formatJobStatus(job.status)}</span>
+        </div>
+        <span className="agent-run-loop" aria-hidden="true">
+          ↻
+        </span>
+      </div>
+      <ol className="agent-run-steps">
+        {steps.length > 0 ? (
+          steps.map((step) => (
+            <li className={`agent-step ${step.status}`} key={step.id}>
+              <span className="agent-step-icon" aria-hidden="true">
+                {formatStepIcon(step.status)}
+              </span>
+              <span>
+                <strong>{step.label}</strong>
+                {step.detail ? <small>{step.detail}</small> : null}
+              </span>
+            </li>
+          ))
+        ) : (
+          <li className="agent-step running">
+            <span className="agent-step-icon" aria-hidden="true">
+              ↻
+            </span>
+            <span>
+              <strong>Queued generation</strong>
+              <small>Preparing the run...</small>
+            </span>
+          </li>
+        )}
+      </ol>
+    </section>
   );
 }
 
@@ -1362,4 +1527,43 @@ function formatToolName(tool: string) {
   if (tool === "steam") return "Steam assets";
   if (tool === "spotify") return "Spotify assets";
   return tool;
+}
+
+function formatMatchSource(item: PackItem) {
+  if (item.asset_kind === "text-card") {
+    return "Generated as a text card from your list.";
+  }
+
+  if (item.source_type === "tmdb") {
+    return `TMDb movie ${item.source_value ?? ""}`.trim();
+  }
+
+  return item.source_type || "External source";
+}
+
+function formatConfidence(item: PackItem) {
+  if (item.asset_kind === "text-card") {
+    return "Text";
+  }
+
+  if (item.confidence === null) {
+    return "Match";
+  }
+
+  return `${Math.round(item.confidence * 100)}%`;
+}
+
+function formatJobStatus(status: GenerationJob["status"]) {
+  if (status === "queued") return "Queued";
+  if (status === "running") return "Running checks";
+  if (status === "failed") return "Needs attention";
+  return "Done";
+}
+
+function formatStepIcon(status: JobStep["status"]) {
+  if (status === "done") return "✓";
+  if (status === "warning") return "!";
+  if (status === "error") return "x";
+  if (status === "running") return "↻";
+  return "·";
 }

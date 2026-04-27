@@ -49,6 +49,9 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(body["item_count"], 2)
         self.assertEqual(body["description"], "Smoke description")
         self.assertEqual(body["row_labels"], ["God", "Good", "Ok"])
+        self.assertEqual(body["items"][0]["asset_kind"], "text-card")
+        self.assertEqual(body["items"][0]["source_type"], "input")
+        self.assertIsNone(body["items"][0]["confidence"])
         self.assertEqual(body["enrichment_status"], "text")
         self.assertEqual(body["items"][0]["filename"], "001-mario.png")
         self.assertIn("extension_url", body)
@@ -136,6 +139,31 @@ class TierzoApiTests(unittest.TestCase):
         self.assertIsNotNone(body["agent_plan"])
         self.assertEqual(body["agent_plan"]["source"], "heuristic")
         self.assertEqual(body["agent_plan"]["tool"], "text")
+
+    def test_generation_job_tracks_steps_and_returns_pack(self) -> None:
+        client = TestClient(app)
+
+        response = client.post(
+            "/jobs",
+            json={
+                "text": "Mario\nLuigi",
+                "preset": "clean",
+                "size": 256,
+                "filename_mode": "both",
+                "title": "Job Smoke",
+                "enrichment_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        created = response.json()
+        job_response = client.get(f"/jobs/{created['job_id']}")
+
+        self.assertEqual(job_response.status_code, 200)
+        job = job_response.json()
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(job["pack"]["item_count"], 2)
+        self.assertEqual(job["steps"][-1]["status"], "done")
 
 
 if __name__ == "__main__":

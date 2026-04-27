@@ -544,14 +544,15 @@ select:focus {
   display: grid;
   align-content: start;
   gap: 8px;
-  min-width: 178px;
+  width: 280px;
+  min-width: 280px;
 }
 
 .card-lab {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 8px;
-  max-width: 250px;
+  width: 100%;
   padding: 10px;
   border: 1px solid #2d2d2d;
   border-radius: 7px;
@@ -562,7 +563,8 @@ select:focus {
   min-width: 0;
 }
 
-.card-lab label:last-child,
+.card-lab-field-full,
+.card-lab-sliders,
 .card-lab-preview {
   grid-column: 1 / -1;
 }
@@ -626,6 +628,27 @@ select:focus {
   float: right;
   color: rgba(255, 255, 255, 0.52);
   font-size: 10px;
+}
+
+.card-lab-sliders {
+  display: grid;
+  gap: 8px;
+}
+
+.card-lab-sliders label {
+  display: grid;
+  grid-template-columns: 66px 38px 1fr;
+  align-items: center;
+  gap: 8px;
+}
+
+.card-lab-sliders label strong {
+  float: none;
+  justify-self: end;
+}
+
+.card-lab-sliders input[type="range"] {
+  min-width: 0;
 }
 
 select {

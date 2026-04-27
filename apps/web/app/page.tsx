@@ -22,6 +22,13 @@ type PackResponse = {
   zip_url: string;
   extension_url: string;
   enrichment_status: string;
+  agent_plan: {
+    domain: string;
+    tool: string;
+    confidence: number;
+    source: string;
+    cache_hit: boolean;
+  } | null;
 };
 
 const API_BASE =
@@ -259,7 +266,7 @@ export default function Home() {
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [preset, setPreset] = useState("arcade");
-  const [enrichmentMode, setEnrichmentMode] = useState("text");
+  const [enrichmentMode, setEnrichmentMode] = useState("auto");
   const [cardStyle, setCardStyle] = useState<CardStyle>(PRESET_STYLES.arcade);
   const [pack, setPack] = useState<PackResponse | null>(null);
   const [board, setBoard] = useState<BoardState>({});
@@ -332,7 +339,17 @@ export default function Home() {
       pack,
     };
     window.localStorage.setItem(BOARD_STORAGE_KEY, JSON.stringify(nextState));
-  }, [board, cardStyle, description, enrichmentMode, pack, preset, text, tiers, title]);
+  }, [
+    board,
+    cardStyle,
+    description,
+    enrichmentMode,
+    pack,
+    preset,
+    text,
+    tiers,
+    title,
+  ]);
 
   const itemCount = useMemo(
     () =>
@@ -839,15 +856,17 @@ export default function Home() {
                 ))}
               </select>
             </label>
-            <label>
-              Enrichment
+            <label className="mode-label">
+              <span className="mode-label-title">✦ Generate mode</span>
               <select
                 value={enrichmentMode}
                 onChange={(event) => setEnrichmentMode(event.target.value)}
               >
-                <option value="text">Text cards</option>
-                <option value="tmdb_movie">TMDb movie posters</option>
+                <option value="auto">Auto Agent</option>
+                <option value="text">Text cards only</option>
+                <option value="tmdb_movie">Movie posters</option>
               </select>
+              <small>Let Tierzo pick text cards or source posters.</small>
             </label>
             <div className="card-lab" aria-label="Card Lab">
               <div className="card-lab-preview" style={cardLabStyle}>
@@ -924,7 +943,7 @@ export default function Home() {
                   }
                 />
               </label>
-              <label>
+              <label className="card-lab-field card-lab-field-full">
                 Font
                 <select
                   value={cardStyle.fontKey}
@@ -939,45 +958,51 @@ export default function Home() {
                   ))}
                 </select>
               </label>
-              <label>
-                Opacity <strong>{cardStyle.backgroundOpacity}%</strong>
-                <input
-                  type="range"
-                  min="20"
-                  max="100"
-                  value={cardStyle.backgroundOpacity}
-                  onChange={(event) =>
-                    updateCardStyle({
-                      backgroundOpacity: Number(event.target.value),
-                    })
-                  }
-                />
-              </label>
-              <label>
-                Glow <strong>{cardStyle.glowBlur}px</strong>
-                <input
-                  type="range"
-                  min="0"
-                  max="32"
-                  value={cardStyle.glowBlur}
-                  onChange={(event) =>
-                    updateCardStyle({ glowBlur: Number(event.target.value) })
-                  }
-                />
-              </label>
-              <label>
-                Border <strong>{cardStyle.borderWidth}px</strong>
-                <input
-                  type="range"
-                  min="0"
-                  max="16"
-                  value={cardStyle.borderWidth}
-                  onChange={(event) =>
-                    updateCardStyle({ borderWidth: Number(event.target.value) })
-                  }
-                />
-              </label>
-              <label>
+              <div className="card-lab-sliders">
+                <label>
+                  Border <strong>{cardStyle.borderWidth}px</strong>
+                  <input
+                    type="range"
+                    min="0"
+                    max="16"
+                    value={cardStyle.borderWidth}
+                    onChange={(event) =>
+                      updateCardStyle({
+                        borderWidth: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Opacity <strong>{cardStyle.backgroundOpacity}%</strong>
+                  <input
+                    type="range"
+                    min="20"
+                    max="100"
+                    value={cardStyle.backgroundOpacity}
+                    onChange={(event) =>
+                      updateCardStyle({
+                        backgroundOpacity: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+                <label>
+                  Glow <strong>{cardStyle.glowBlur}px</strong>
+                  <input
+                    type="range"
+                    min="0"
+                    max="32"
+                    value={cardStyle.glowBlur}
+                    onChange={(event) =>
+                      updateCardStyle({
+                        glowBlur: Number(event.target.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+              <label className="card-lab-field-full">
                 Radius <strong>{cardStyle.cornerRadius}px</strong>
                 <input
                   type="range"
@@ -1010,7 +1035,16 @@ export default function Home() {
               </a>
             ) : null}
             {error ? <p className="error">{error}</p> : null}
-            {pack ? <p className="enrichment-status">{pack.enrichment_status}</p> : null}
+            {pack ? (
+              <p className="enrichment-status">{formatGenerationStatus(pack)}</p>
+            ) : null}
+            {pack?.agent_plan ? (
+              <p className="enrichment-status">
+                Tierzo read this as {pack.agent_plan.domain} and chose{" "}
+                {formatToolName(pack.agent_plan.tool)}
+                {pack.agent_plan.cache_hit ? " from cache" : ""}
+              </p>
+            ) : null}
           </div>
         </div>
 
@@ -1293,4 +1327,39 @@ function hexToRgba(hex: string, opacity: number) {
   const green = Number.parseInt(normalized.slice(2, 4), 16);
   const blue = Number.parseInt(normalized.slice(4, 6), 16);
   return `rgba(${red}, ${green}, ${blue}, ${Math.max(0.2, Math.min(1, opacity))})`;
+}
+
+function formatGenerationStatus(pack: PackResponse) {
+  const status = pack.enrichment_status;
+  if (status === "text") {
+    return `Generated ${pack.item_count} text cards.`;
+  }
+
+  const match = status.match(/^tmdb_movie:(\d+)\/(\d+)$/);
+  if (match) {
+    const matched = Number(match[1]);
+    const total = Number(match[2]);
+    const fallback = total - matched;
+    return fallback > 0
+      ? `Found ${matched}/${total} movie posters. ${fallback} used text cards.`
+      : `Found movie posters for all ${total} items.`;
+  }
+
+  if (status.includes("missing_api_key")) {
+    return "Movie posters need a TMDb key. Generated text cards instead.";
+  }
+
+  if (status.includes("error_fallback_text")) {
+    return "Movie poster lookup failed. Generated text cards instead.";
+  }
+
+  return status;
+}
+
+function formatToolName(tool: string) {
+  if (tool === "tmdb_movie") return "movie posters";
+  if (tool === "text") return "text cards";
+  if (tool === "steam") return "Steam assets";
+  if (tool === "spotify") return "Spotify assets";
+  return tool;
 }

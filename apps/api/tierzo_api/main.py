@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
+from tierzo.agentic import IntakePlan, plan_intake
 from tierzo.export import generate_pack, zip_pack
 from tierzo.enrichers import TmdbMovieEnricher
 from tierzo.parsers import parse_text_lines
@@ -18,6 +19,26 @@ from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
 STORAGE_DIR = ROOT_DIR / ".tierzo" / "storage"
+AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
+
+
+def load_root_env() -> None:
+    env_path = ROOT_DIR / ".env"
+    if not env_path.exists():
+        return
+
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, value = stripped.split("=", 1)
+        normalized_key = key.strip()
+        if not os.environ.get(normalized_key):
+            os.environ[normalized_key] = value.strip().strip('"').strip("'")
+
+
+load_root_env()
+
 FONT_PATHS = {
     "default": None,
     "impact": Path("C:/Windows/Fonts/impact.ttf"),
@@ -94,6 +115,7 @@ class GeneratePackRequest(BaseModel):
     row_labels: list[str] = Field(default_factory=lambda: ["S", "A", "B", "C", "D"])
     custom_preset: CardStyleRequest | None = None
     enrichment_mode: str = "text"
+    agent_cache_refresh: bool = False
 
 
 class PackItemResponse(BaseModel):
@@ -114,6 +136,7 @@ class GeneratePackResponse(BaseModel):
     zip_url: str
     extension_url: str
     enrichment_status: str
+    agent_plan: dict[str, object] | None = None
 
 
 class TierMakerImagePayload(BaseModel):
@@ -157,8 +180,12 @@ app.add_middleware(
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
-    return {"status": "ok"}
+def health() -> dict[str, object]:
+    return {
+        "status": "ok",
+        "tmdb_configured": bool(os.getenv("TMDB_API_KEY")),
+        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+    }
 
 
 @app.get("/presets")
@@ -183,7 +210,19 @@ def resolve_font_path(font_family: str, *, bold: bool, italic: bool) -> Path | N
 
 @app.post("/packs", response_model=GeneratePackResponse)
 def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
+    agent_plan: IntakePlan | None = None
+    enrichment_mode = payload.enrichment_mode
     values = parse_text_lines(payload.text)
+    if payload.enrichment_mode == "auto":
+        agent_plan = plan_intake(
+            payload.text,
+            cache_dir=AGENT_CACHE_DIR,
+            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            force_refresh=payload.agent_cache_refresh,
+        )
+        values = agent_plan.items
+        enrichment_mode = agent_plan.tool
+
     if not values:
         raise HTTPException(status_code=400, detail="No non-empty items found.")
 
@@ -223,7 +262,7 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
 
     enriched_assets = None
     enrichment_status = "text"
-    if payload.enrichment_mode == "tmdb_movie":
+    if enrichment_mode == "tmdb_movie":
         api_key = os.getenv("TMDB_API_KEY")
         if api_key:
             try:
@@ -249,7 +288,9 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
             "row_labels": payload.row_labels,
             "enrichment": {
                 "mode": payload.enrichment_mode,
+                "resolved_mode": enrichment_mode,
                 "status": enrichment_status,
+                "agent_plan": agent_plan.to_dict() if agent_plan else None,
             },
             "card_style": {
                 "preset": payload.preset,
@@ -292,6 +333,7 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
         zip_url=f"/packs/{pack_id}/zip",
         extension_url=f"/packs/{pack_id}/tiermaker-extension.json",
         enrichment_status=enrichment_status,
+        agent_plan=agent_plan.to_dict() if agent_plan else None,
     )
 
 

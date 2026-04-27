@@ -141,6 +141,12 @@ Optional movie poster enrichment uses TMDb. Without this key, the `TMDb movie po
 $env:TMDB_API_KEY="your_tmdb_api_key"
 ```
 
+You can also put it in a local root `.env` file:
+
+```text
+TMDB_API_KEY=your_tmdb_api_key
+```
+
 Run the API:
 
 ```powershell

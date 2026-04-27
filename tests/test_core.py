@@ -7,6 +7,7 @@ from pathlib import Path
 
 from tierzo.export import generate_pack, zip_pack
 from tierzo.filenames import image_filename, slugify
+from tierzo.agentic import plan_intake
 from tierzo.parsers import parse_csv_file, parse_text_lines
 from tierzo.presets import PRESETS, get_preset
 
@@ -66,6 +67,16 @@ class TierzoCoreTests(unittest.TestCase):
     def test_opinionated_presets_are_available(self) -> None:
         for name in ["hero-hud", "mono-soul", "creature-dex", "cyber-mint", "blood-moon"]:
             self.assertIn(name, PRESETS)
+
+    def test_agentic_intake_uses_cache(self) -> None:
+        tmp = temporary_workspace()
+        first = plan_intake("Alien\nThe Thing", cache_dir=tmp)
+        second = plan_intake("Alien\nThe Thing", cache_dir=tmp)
+
+        self.assertEqual(first.items, ["Alien", "The Thing"])
+        self.assertEqual(second.items, ["Alien", "The Thing"])
+        self.assertFalse(first.cache_hit)
+        self.assertTrue(second.cache_hit)
 
     def test_zip_pack_writes_archive(self) -> None:
         tmp = temporary_workspace()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -79,19 +80,24 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(manifest_body["card_style"]["glow_blur"], 12)
 
     def test_tmdb_enrichment_without_key_falls_back_to_text_cards(self) -> None:
+        previous_key = os.environ.pop("TMDB_API_KEY", None)
         client = TestClient(app)
 
-        response = client.post(
-            "/packs",
-            json={
-                "text": "Alien\nThe Thing",
-                "preset": "arcade",
-                "size": 256,
-                "filename_mode": "both",
-                "title": "Movies",
-                "enrichment_mode": "tmdb_movie",
-            },
-        )
+        try:
+            response = client.post(
+                "/packs",
+                json={
+                    "text": "Alien\nThe Thing",
+                    "preset": "arcade",
+                    "size": 256,
+                    "filename_mode": "both",
+                    "title": "Movies",
+                    "enrichment_mode": "tmdb_movie",
+                },
+            )
+        finally:
+            if previous_key is not None:
+                os.environ["TMDB_API_KEY"] = previous_key
 
         self.assertEqual(response.status_code, 200)
         body = response.json()
@@ -100,6 +106,36 @@ class TierzoApiTests(unittest.TestCase):
         manifest_body = manifest_response.json()
         self.assertEqual(manifest_body["enrichment"]["mode"], "tmdb_movie")
         self.assertEqual(manifest_body["items"][0]["asset_kind"], "text-card")
+
+    def test_auto_agent_uses_typed_plan(self) -> None:
+        previous_openai_key = os.environ.pop("OPENAI_API_KEY", None)
+        previous_tmdb_key = os.environ.pop("TMDB_API_KEY", None)
+        client = TestClient(app)
+
+        try:
+            response = client.post(
+                "/packs",
+                json={
+                    "text": "Alien\nThe Thing",
+                    "preset": "arcade",
+                    "size": 256,
+                    "filename_mode": "both",
+                    "title": "Auto",
+                    "enrichment_mode": "auto",
+                    "agent_cache_refresh": True,
+                },
+            )
+        finally:
+            if previous_openai_key is not None:
+                os.environ["OPENAI_API_KEY"] = previous_openai_key
+            if previous_tmdb_key is not None:
+                os.environ["TMDB_API_KEY"] = previous_tmdb_key
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIsNotNone(body["agent_plan"])
+        self.assertEqual(body["agent_plan"]["source"], "heuristic")
+        self.assertEqual(body["agent_plan"]["tool"], "text")
 
 
 if __name__ == "__main__":

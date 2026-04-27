@@ -1,7 +1,8 @@
 import { chromium } from "playwright";
 
 const browser = await chromium.launch({ headless: true });
-const page = await browser.newPage({ viewport: { width: 1440, height: 1000 } });
+const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 1000 } });
+const page = await context.newPage();
 const consoleMessages = [];
 
 page.on("console", (message) => {
@@ -26,12 +27,20 @@ await page.waitForSelector("img", { timeout: 30000 });
 await page.waitForFunction(() =>
   Array.from(document.images).every((image) => image.complete && image.naturalWidth > 0),
 );
+await page.locator(".bench .card").first().dragTo(page.locator(".tier-row").nth(4));
+const exportDownload = await Promise.all([
+  page.waitForEvent("download"),
+  page.getByRole("button", { name: /export png/i }).click(),
+]).then(([download]) => download);
+await exportDownload.saveAs("../../.tierzo/export-test.png");
 
 const imageCount = await page.locator("img").count();
 const zipHref = await page.locator("a", { hasText: /download zip/i }).getAttribute("href");
 const extensionHref = await page.getByRole("link", { name: /extension json/i }).getAttribute("href");
+const exportName = exportDownload.suggestedFilename();
 await page.screenshot({ path: "../../.tierzo/demo-screenshot.png", fullPage: true });
 
+await context.close();
 await browser.close();
 
 console.log(
@@ -41,6 +50,7 @@ console.log(
       activeLabelAfterEdit,
       tierInputCount,
       imageCount,
+      exportName,
       zipHref,
       extensionHref,
       consoleMessages,

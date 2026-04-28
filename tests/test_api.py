@@ -4,12 +4,14 @@ import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
 sys.path.append(str(Path("apps/api").resolve()))
 
 from tierzo_api.main import app  # noqa: E402
+from tierzo.enrichers import EnrichedAsset  # noqa: E402
 
 
 class TierzoApiTests(unittest.TestCase):
@@ -164,6 +166,60 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["pack"]["item_count"], 2)
         self.assertEqual(job["steps"][-1]["status"], "done")
+
+    def test_asset_override_can_force_text_card(self) -> None:
+        client = TestClient(app)
+        fake_image = Path(".tierzo/test-source.jpg").resolve()
+        fake_image.parent.mkdir(parents=True, exist_ok=True)
+        fake_image.write_bytes(b"not-a-real-image-but-not-used")
+
+        def fake_enrich_many(
+            _self: object,
+            values: list[str],
+            image_dir: Path,
+        ) -> dict[str, EnrichedAsset]:
+            return {
+                "Alien": EnrichedAsset(
+                    query="Alien",
+                    title="Alien",
+                    source_type="tmdb",
+                    source_value="348",
+                    source_url="https://www.themoviedb.org/movie/348",
+                    image_path=fake_image,
+                    confidence=0.98,
+                )
+            }
+
+        previous_key = os.environ.get("TMDB_API_KEY")
+        os.environ["TMDB_API_KEY"] = "test"
+
+        try:
+            with patch("tierzo_api.main.TmdbMovieEnricher.enrich_many", fake_enrich_many):
+                response = client.post(
+                    "/packs",
+                    json={
+                        "text": "Alien",
+                        "preset": "arcade",
+                        "size": 256,
+                        "filename_mode": "both",
+                        "title": "Overrides",
+                        "enrichment_mode": "tmdb_movie",
+                        "asset_overrides": {"Alien": "text"},
+                    },
+                )
+        finally:
+            if previous_key is None:
+                os.environ.pop("TMDB_API_KEY", None)
+            else:
+                os.environ["TMDB_API_KEY"] = previous_key
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["enrichment_status"], "tmdb_movie:0/1")
+        self.assertEqual(body["items"][0]["asset_kind"], "text-card")
+
+        manifest_body = client.get(body["manifest_url"]).json()
+        self.assertEqual(manifest_body["enrichment"]["asset_overrides"], {"Alien": "text"})
 
 
 if __name__ == "__main__":

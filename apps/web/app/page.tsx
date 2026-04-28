@@ -51,6 +51,8 @@ type GenerationJob = {
   error: string | null;
 };
 
+type MatchOverrides = Record<string, "text">;
+
 const API_BASE =
   process.env.NEXT_PUBLIC_TIERZO_API_URL ?? "http://localhost:8000";
 
@@ -294,6 +296,7 @@ export default function Home() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
   const [showMatches, setShowMatches] = useState(false);
+  const [matchOverrides, setMatchOverrides] = useState<MatchOverrides>({});
   const [generationJob, setGenerationJob] = useState<GenerationJob | null>(
     null,
   );
@@ -384,7 +387,7 @@ export default function Home() {
     [deferredText],
   );
 
-  function buildGeneratePayload() {
+  function buildGeneratePayload(overrides: MatchOverrides = {}) {
     return {
       text,
       preset,
@@ -394,6 +397,7 @@ export default function Home() {
       description: description.trim() || null,
       row_labels: tiers.map((tier) => tier.label.trim() || "-"),
       enrichment_mode: enrichmentMode,
+      asset_overrides: overrides,
       custom_preset: {
         background: cardStyle.background,
         text_color: cardStyle.textColor,
@@ -435,7 +439,7 @@ export default function Home() {
     }
   }
 
-  async function generatePack() {
+  async function generatePack(overrides: MatchOverrides = {}) {
     setError(null);
     setIsGenerating(true);
 
@@ -445,7 +449,7 @@ export default function Home() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify(buildGeneratePayload()),
+        body: JSON.stringify(buildGeneratePayload(overrides)),
       });
 
       if (!response.ok) {
@@ -468,6 +472,7 @@ export default function Home() {
       const nextPack = await pollGenerationJob(createdJob.job_id);
       setPack(nextPack);
       setShowMatches(true);
+      setMatchOverrides({});
       setBoard({
         [tiers[0]?.id ?? "tier-s"]: nextPack.items.slice(0, 2),
         [tiers[1]?.id ?? "tier-a"]: nextPack.items.slice(2, 4),
@@ -480,6 +485,22 @@ export default function Home() {
     } finally {
       setIsGenerating(false);
     }
+  }
+
+  function updateMatchOverride(itemName: string, action: "keep" | "text") {
+    setMatchOverrides((current) => {
+      const next = { ...current };
+      if (action === "keep") {
+        delete next[itemName];
+      } else {
+        next[itemName] = "text";
+      }
+      return next;
+    });
+  }
+
+  function applyMatchOverrides() {
+    void generatePack(matchOverrides);
   }
 
   const rankedIds = new Set(
@@ -1084,7 +1105,7 @@ export default function Home() {
             </div>
             <button
               type="button"
-              onClick={generatePack}
+              onClick={() => generatePack()}
               disabled={isGenerating || itemCount === 0}
             >
               {isGenerating ? "Generating..." : "Generate pack"}
@@ -1122,7 +1143,15 @@ export default function Home() {
                 {pack.agent_plan.cache_hit ? " from cache" : ""}
               </p>
             ) : null}
-            {pack && showMatches ? <MatchesPanel pack={pack} /> : null}
+            {pack && showMatches ? (
+              <MatchesPanel
+                isApplying={isGenerating}
+                onApply={applyMatchOverrides}
+                onOverride={updateMatchOverride}
+                overrides={matchOverrides}
+                pack={pack}
+              />
+            ) : null}
           </div>
         </div>
 
@@ -1164,9 +1193,22 @@ export default function Home() {
   );
 }
 
-function MatchesPanel({ pack }: { pack: PackResponse }) {
+function MatchesPanel({
+  isApplying,
+  onApply,
+  onOverride,
+  overrides,
+  pack,
+}: {
+  isApplying: boolean;
+  onApply: () => void;
+  onOverride: (itemName: string, action: "keep" | "text") => void;
+  overrides: MatchOverrides;
+  pack: PackResponse;
+}) {
   const matched = pack.items.filter((item) => item.asset_kind !== "text-card");
   const fallback = pack.items.length - matched.length;
+  const overrideCount = Object.keys(overrides).length;
 
   return (
     <section className="matches-panel" aria-label="Review matches">
@@ -1178,31 +1220,65 @@ function MatchesPanel({ pack }: { pack: PackResponse }) {
             {fallback > 0 ? `, ${fallback} text fallback` : ""}
           </span>
         </div>
+        <button
+          type="button"
+          onClick={onApply}
+          disabled={overrideCount === 0 || isApplying}
+        >
+          {isApplying ? "Applying..." : `Apply changes${overrideCount ? ` (${overrideCount})` : ""}`}
+        </button>
       </div>
       <div className="matches-list">
-        {pack.items.map((item) => (
-          <article className="match-row" key={item.id}>
-            <Image
-              src={apiUrl(item.image_url)}
-              alt=""
-              width={42}
-              height={42}
-              unoptimized
-            />
-            <div className="match-copy">
-              <strong>{item.name}</strong>
-              <span>{formatMatchSource(item)}</span>
-            </div>
-            <span className={`match-pill ${item.asset_kind}`}>
-              {formatConfidence(item)}
-            </span>
-            {item.source_url ? (
-              <a href={item.source_url} rel="noreferrer" target="_blank">
-                Source
-              </a>
-            ) : null}
-          </article>
-        ))}
+        {pack.items.map((item) => {
+          const isForcedText = overrides[item.name] === "text";
+
+          return (
+            <article
+              className={`match-row ${isForcedText ? "forced-text" : ""}`}
+              key={item.id}
+            >
+              <Image
+                src={apiUrl(item.image_url)}
+                alt=""
+                width={42}
+                height={42}
+                unoptimized
+              />
+              <div className="match-copy">
+                <strong>{item.name}</strong>
+                <span>
+                  {isForcedText
+                    ? "Will regenerate as a text card."
+                    : formatMatchSource(item)}
+                </span>
+              </div>
+              <span className={`match-pill ${isForcedText ? "text-card" : item.asset_kind}`}>
+                {isForcedText ? "Text" : formatConfidence(item)}
+              </span>
+              <div className="match-actions">
+                <button
+                  type="button"
+                  className={isForcedText ? "" : "active"}
+                  onClick={() => onOverride(item.name, "keep")}
+                >
+                  Keep
+                </button>
+                <button
+                  type="button"
+                  className={isForcedText ? "active" : ""}
+                  onClick={() => onOverride(item.name, "text")}
+                >
+                  Text
+                </button>
+                {item.source_url ? (
+                  <a href={item.source_url} rel="noreferrer" target="_blank">
+                    Source
+                  </a>
+                ) : null}
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );

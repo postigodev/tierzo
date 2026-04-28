@@ -118,6 +118,7 @@ class GeneratePackRequest(BaseModel):
     custom_preset: CardStyleRequest | None = None
     enrichment_mode: str = "text"
     agent_cache_refresh: bool = False
+    asset_overrides: dict[str, str] = Field(default_factory=dict)
 
 
 class PackItemResponse(BaseModel):
@@ -351,6 +352,11 @@ def build_pack(
 
     enriched_assets = None
     enrichment_status = "text"
+    force_text_values = {
+        name
+        for name, action in payload.asset_overrides.items()
+        if action == "text"
+    }
     if enrichment_mode == "tmdb_movie":
         api_key = os.getenv("TMDB_API_KEY")
         if api_key:
@@ -358,6 +364,9 @@ def build_pack(
                 if progress_callback:
                     progress_callback("assets_running", f"Searching posters for {len(values)} items.")
                 enriched_assets = TmdbMovieEnricher(api_key).enrich_many(values, output_dir / "_sources")
+                for value in force_text_values:
+                    if enriched_assets:
+                        enriched_assets.pop(value, None)
                 enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(values)}"
             except Exception:
                 enriched_assets = None
@@ -401,6 +410,7 @@ def build_pack(
                 "resolved_mode": enrichment_mode,
                 "status": enrichment_status,
                 "agent_plan": agent_plan.to_dict() if agent_plan else None,
+                "asset_overrides": payload.asset_overrides,
             },
             "card_style": {
                 "preset": payload.preset,

@@ -1,8 +1,8 @@
 # Tierzo
 
-Tierzo is an open-source, agentic tier-list asset generator. It turns messy lists, spreadsheets, and eventually links or prompts into polished image packs, tier-board previews, and TierMaker-ready exports.
+Tierzo is an open-source, agentic tier-list asset generator. It turns messy lists, spreadsheets, links, and prompts into polished image packs, tier-board previews, and TierMaker-ready exports.
 
-The current version is the first technical foundation: a reusable Python core, a CLI, text-card presets, ZIP export, and `manifest.json` generation.
+The current version includes a reusable Python core, a CLI, a FastAPI backend, a Next.js demo, text-card/card-lab rendering, job-based generation, TMDb movie poster enrichment, Review Matches, ZIP export, and `manifest.json` generation.
 
 ## What Works Today
 
@@ -12,20 +12,54 @@ The current version is the first technical foundation: a reusable Python core, a
 - Auto-fit and wrap long text.
 - Use basic visual presets.
 - Tune cards in the web Card Lab.
+- Run generation as observable jobs.
+- Use Auto Agent to classify pasted lists when `OPENAI_API_KEY` is configured.
 - Optionally enrich movie lists with TMDb posters.
+- Review matches, force specific items back to text cards, and regenerate.
 - Write a portable `manifest.json`.
+- Export a TierMaker extension payload JSON.
+- Export a final tier-board PNG from the web demo.
 - Export a ZIP bundle.
-- Keep the legacy Excel script working.
+- Keep the legacy Excel script available under `examples/`.
 
-## Install
+## Quick Start
 
-Use Python 3.10 or newer.
+Use Python 3.10+ and pnpm.
 
 ```powershell
 python -m pip install -e .
+pnpm install
 ```
 
-Or install dependencies directly for the legacy script:
+Run the full local demo from the repo root:
+
+```powershell
+pnpm dev
+```
+
+This starts:
+
+- FastAPI on `http://localhost:8000`
+- Next.js on `http://localhost:3000`
+
+Run checks from root:
+
+```powershell
+pnpm verify
+```
+
+Useful aliases:
+
+```powershell
+pnpm dev:api
+pnpm dev:web
+pnpm test
+pnpm lint
+pnpm build
+pnpm demo:verify
+```
+
+Install dependencies directly for the legacy script if you are not using the package install:
 
 ```powershell
 python -m pip install -r requirements.txt
@@ -111,52 +145,67 @@ items_tierzo.zip
 
 ## Legacy Excel Script
 
-The original command still works:
+The original prototype is preserved for reference:
 
 ```powershell
-python generate_text_images.py .\items.xlsx
+python .\examples\generate_text_images.py .\items.xlsx
 ```
 
-It reads the first worksheet, takes every non-empty value from column A, and generates numbered PNGs.
+It reads the first worksheet, takes every non-empty value from column A, and generates numbered PNGs. Prefer the modern CLI for new workflows:
+
+```powershell
+python -m tierzo .\items.xlsx --zip
+```
+
+## Repo Layout
+
+```text
+apps/
+  api/      FastAPI app and API workspace scripts
+  web/      Next.js demo app
+docs/       Product, roadmap, architecture, demo, extension, open-core notes
+examples/   Legacy/reference scripts and sample-oriented code
+scripts/    Repo helper scripts for Python discovery and local dev
+src/        Python package and CLI core
+tests/      Python unit/API tests
+```
+
+Root is intentionally kept for entrypoints and tooling: `README.md`, `AGENTS.md`, `LICENSE`, package configs, Python configs, and env examples.
 
 ## Product Direction
 
 Tierzo is heading toward:
 
-- A Next.js web demo with paste/upload.
-- A tier-board preview with drag-and-drop ranking.
-- Final PNG export.
-- TierMaker-ready ZIP batches.
-- Agentic list cleanup and entity resolution.
+- A deployable Next.js demo with paste/upload and shareable artifacts.
+- A tier-board preview with drag-and-drop ranking and final PNG export.
+- TierMaker-ready ZIP batches plus extension-guided workflows.
+- Agentic list cleanup, entity resolution, and user-visible trace/review.
 - API enrichers for movies, games, anime, music, and more.
+- A provider/plugin contract where TMDb, Steam, Spotify, and future tools return comparable matches.
 - A Chrome extension companion for guided TierMaker workflows.
 
 ## Demo App
 
 The first web demo lives in `apps/web` and talks to the FastAPI service in `apps/api`.
 
-Optional movie poster enrichment uses TMDb. Without this key, the `TMDb movie posters` mode safely falls back to text cards.
+Optional agentic planning uses OpenAI and optional movie poster enrichment uses TMDb. Without these keys, Tierzo safely falls back to deterministic text cards.
 
 ```powershell
+$env:OPENAI_API_KEY="your_openai_api_key"
 $env:TMDB_API_KEY="your_tmdb_api_key"
 ```
 
 You can also put it in a local root `.env` file:
 
 ```text
+OPENAI_API_KEY=your_openai_api_key
 TMDB_API_KEY=your_tmdb_api_key
 ```
 
-Run the API:
+Run both services:
 
 ```powershell
-pnpm api:dev
-```
-
-Run the web app in another terminal:
-
-```powershell
-pnpm web:dev
+pnpm dev
 ```
 
 Open:
@@ -168,17 +217,18 @@ http://localhost:3000
 Verify the running demo with Playwright:
 
 ```powershell
+# in another terminal, keep pnpm dev running first
 pnpm demo:verify
 ```
 
 Read more:
 
-- [Product brief](PRODUCT.md)
-- [Demo plan](DEMO.md)
-- [Roadmap](ROADMAP.md)
-- [Architecture](ARCHITECTURE.md)
-- [Browser extension contract](EXTENSION.md)
-- [Open-core model](OPEN_CORE.md)
+- [Product brief](docs/PRODUCT.md)
+- [Demo plan](docs/DEMO.md)
+- [Roadmap](docs/ROADMAP.md)
+- [Architecture](docs/ARCHITECTURE.md)
+- [Browser extension contract](docs/EXTENSION.md)
+- [Open-core model](docs/OPEN_CORE.md)
 
 ## Development
 
@@ -197,7 +247,11 @@ python -m tierzo --help
 Run tests:
 
 ```powershell
-python -m unittest discover -s tests
+pnpm test
 ```
 
 Generated files are ignored by git when they use the default `*_tierzo`, `*_images`, `.tierzo`, or `.zip` paths.
+
+## License
+
+Tierzo is released under the [MIT License](LICENSE).

@@ -1,4 +1,6 @@
-import { chromium } from "playwright";
+import playwright from "playwright";
+
+const { chromium } = playwright;
 
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({ acceptDownloads: true, viewport: { width: 1440, height: 1000 } });

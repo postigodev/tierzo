@@ -1,46 +1,46 @@
 # Tierzo Demo Plan
 
-The demo is a first-class product goal. Tierzo should become understandable, impressive, and shareable before the full agentic backend exists.
+The demo is a first-class product goal. Tierzo should become understandable, impressive, and shareable before the full platform exists.
 
 ## Demo Promise
 
 The public demo should prove this in under one minute:
 
-Paste a messy list, get polished tier-list assets, preview the ranking, and export something useful.
+Paste a messy list, let Tierzo generate or source assets, review what it found, preview the ranking, and export something useful.
 
 The demo should not feel like a landing page with a tool attached. The tool is the first screen.
 
-## First Demo Story
+## Current Demo Story
 
-The first demo should show a deterministic flow that does not require API keys:
+The current demo already supports:
 
-1. User opens Tierzo.
-2. User sees a paste box already seeded with a compelling sample list.
-3. User clicks generate.
-4. Tierzo creates styled cards.
-5. User drags cards onto a tier board.
-6. User exports a final PNG.
-7. User exports a TierMaker-ready ZIP.
+1. Open Tierzo.
+2. Edit the tier-list title, description, and rows inline.
+3. Paste or edit a source list.
+4. Choose `Auto Agent`, `Text cards only`, or `Movie posters`.
+5. Customize card visuals in Card Lab.
+6. Generate through an observable job panel.
+7. Review matches and force any item back to a text card.
+8. Drag cards onto the tier board.
+9. Export final PNG, ZIP, manifest, and TierMaker extension JSON.
 
-This gives us a public demo even before AI enrichment ships.
+This is now more than a deterministic text-card demo. It is the first human-in-the-loop agentic demo.
 
 ## First-Viewport Requirements
 
-The first viewport should immediately communicate the product:
-
 - Brand: Tierzo.
-- Primary action: paste/upload/generate.
+- Primary action: paste/generate.
 - Visible tier-board or generated asset preview.
 - No generic marketing hero before the tool.
 - No card-heavy SaaS landing layout before the usable experience.
 
-The user should understand "messy list in, tier pack out" without reading a long explanation.
+The user should understand “messy list in, tier pack out” without reading a long explanation.
 
 ## Demo Inputs
 
 Use inputs that feel culturally rankable and visually fun.
 
-Good first examples:
+Good examples:
 
 - PS2 survival horror games.
 - A24 movies.
@@ -49,44 +49,34 @@ Good first examples:
 - Anime openings.
 - Fast food fries.
 - Fighting game characters.
+- “top 20 alien movies” for Auto Agent + TMDb.
 
 Avoid demo lists that are too generic, too corporate, or legally awkward as the only sample.
 
 ## Demo Modes
 
-### Mode 1: Text Cards
+### Text Cards
 
-This is the first shippable mode:
-
-- Works without AI.
+- Works without API keys.
 - Uses the local core.
-- Shows style presets clearly.
+- Shows style presets and Card Lab clearly.
 - Produces clean PNGs and ZIP export.
 
-### Mode 2: Mock Enriched Cards
+### Auto Agent
 
-Before real enrichers exist, we may include curated demo data to show the intended direction:
+- Uses `OPENAI_API_KEY` when configured.
+- Classifies the list.
+- Chooses a tool such as text cards or TMDb movie posters.
+- Caches plans to reduce repeated calls.
+- Falls back to heuristics/deterministic text cards when unavailable.
 
-- Poster/cover/card examples.
-- Source metadata in the manifest.
-- A few intentionally ambiguous items.
+### Movie Posters
 
-Mock data must be clearly marked in code and docs.
-
-### Mode 3: Real Enrichment
-
-Once one source connector exists:
-
-- Fetch real covers/posters/artwork.
-- Show confidence.
-- Let users resolve ambiguity.
-- Preserve credits/source URLs.
-
-Current first connector:
-
-- TMDb movie poster mode behind `TMDB_API_KEY`.
-- Falls back to deterministic text cards when the key is missing or a match fails.
-- Stores source metadata on each manifest item.
+- Uses `TMDB_API_KEY`.
+- Fetches real movie posters and source metadata.
+- Falls back to text cards when the key is missing, lookup fails, or an item has no match.
+- Shows source/confidence in Review Matches.
+- Lets users force selected items back to text cards with `asset_overrides`.
 
 ## Visual Bar
 
@@ -100,6 +90,7 @@ Minimum bar:
 - Drag-and-drop states are obvious.
 - Exported PNG does not include accidental UI chrome.
 - ZIP contains predictable filenames and `manifest.json`.
+- Review Matches makes source decisions visible without bloating the core flow.
 
 Avoid:
 
@@ -130,32 +121,33 @@ A demo slice is not done until:
 - The generated output is usable outside Tierzo.
 - The output looks intentional at desktop and mobile sizes.
 - The README can show a screenshot or exported result.
-- The flow has one clear "wow" moment.
+- The flow has one clear “wow” moment.
 - The feature has a local verification command or browser check.
 
 ## Demo Roadmap
 
 ### Demo 0: CLI Proof
 
-Status: in progress.
+Status: done.
 
 - Generate images from TXT/CSV/XLSX.
 - Export ZIP.
 - Write manifest.
-- Show sample output in README.
+- Keep legacy script under `examples/`.
 
 ### Demo 1: Web Text-Card Studio
 
-Status: in progress.
+Status: done.
 
 - Next.js app.
 - Paste box.
 - Preset picker.
-- Generate preview cards.
+- Card Lab.
 - Download ZIP.
-- Playwright verification writes `.tierzo/demo-screenshot.png`.
 
 ### Demo 2: Tier Board Preview
+
+Status: done.
 
 - Editable tier labels.
 - Drag-and-drop cards.
@@ -164,27 +156,29 @@ Status: in progress.
 
 ### Demo 3: TierMaker-Ready Export
 
-- Extension payload JSON.
-- Batch validation.
-- TierMaker upload guide.
-- ZIP structure preview.
-- Compatibility status.
+Status: started.
+
+- Extension payload JSON exists.
+- ZIP export exists.
+- Next: extension UI and upload guide.
 
 ### Demo 4: Agentic Cleanup
 
-- Messy list normalization.
-- Domain guess.
-- Confidence per item.
-- Review ambiguous items.
+Status: started.
+
+- Auto Agent exists.
+- OpenAI-backed planning exists.
+- Caching exists.
+- Next: richer review/correction and eval fixtures.
 
 ### Demo 5: First Real Enricher
 
-- One real source connector.
-- Real images.
-- Human review for ambiguous matches.
-- Credits in manifest.
+Status: started.
 
-Status: started with TMDb movie poster enrichment.
+- TMDb movie poster enrichment exists.
+- Review Matches exists.
+- Text-card overrides exist.
+- Next: search-again/replace-match and a second provider such as Steam or Spotify.
 
 ## Collaboration Rule
 

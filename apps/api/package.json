@@ -1,0 +1,8 @@
+{
+  "name": "@tierzo/api",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "node ../../scripts/python.mjs -m uvicorn tierzo_api.main:app --app-dir . --reload --port 8000"
+  }
+}

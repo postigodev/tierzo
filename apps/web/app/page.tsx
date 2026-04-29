@@ -6,6 +6,7 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import { AgentRunPanel } from "../components/agent-run-panel";
 import { MatchesPanel } from "../components/matches-panel";
 import { Card } from "../components/tier-card";
+import { usePackGeneration } from "../hooks/use-pack-generation";
 import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
 import {
@@ -28,9 +29,7 @@ import {
 import { hexToRgba, textDecoration } from "../lib/style-utils";
 import type {
   CardStyle,
-  GenerationJob,
   MatchOverrides,
-  PackResponse,
   SavedDemoState,
 } from "../lib/types";
 
@@ -101,18 +100,23 @@ export default function Home() {
   const [cardStyle, setCardStyle] = useState<CardStyle>(() =>
     resolveSavedCardStyle(savedState?.cardStyle),
   );
-  const [pack, setPack] = useState<PackResponse | null>(
-    () => savedState?.pack ?? null,
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [isGenerating, setIsGenerating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
-  const [showMatches, setShowMatches] = useState(false);
-  const [matchOverrides, setMatchOverrides] = useState<MatchOverrides>({});
-  const [generationJob, setGenerationJob] = useState<GenerationJob | null>(
-    null,
-  );
   const deferredText = useDeferredValue(text);
+  const {
+    error,
+    generatePack,
+    generationJob,
+    isGenerating,
+    matchOverrides,
+    pack,
+    setError,
+    setShowMatches,
+    showMatches,
+    updateMatchOverride,
+  } = usePackGeneration({
+    buildPayload: buildGeneratePayload,
+    initialPack: savedState?.pack ?? null,
+  });
   const {
     benchItems,
     board,
@@ -211,97 +215,21 @@ export default function Home() {
     };
   }
 
-  async function pollGenerationJob(jobId: string) {
-    for (;;) {
-      const response = await fetch(apiUrl(`/jobs/${jobId}`));
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail ?? "Tierzo lost this generation job.");
-      }
-
-      const nextJob = (await response.json()) as GenerationJob;
-      setGenerationJob(nextJob);
-
-      if (nextJob.status === "completed" && nextJob.pack) {
-        return nextJob.pack;
-      }
-
-      if (nextJob.status === "failed") {
-        throw new Error(nextJob.error ?? "Tierzo could not generate this pack.");
-      }
-
-      await new Promise((resolve) => window.setTimeout(resolve, 650));
+  async function handleGeneratePack(overrides: MatchOverrides = {}) {
+    const nextPack = await generatePack(overrides);
+    if (!nextPack) {
+      return;
     }
-  }
 
-  async function generatePack(overrides: MatchOverrides = {}) {
-    setError(null);
-    setIsGenerating(true);
-
-    try {
-      const response = await fetch(apiUrl("/jobs"), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify(buildGeneratePayload(overrides)),
-      });
-
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        throw new Error(body?.detail ?? "Tierzo could not generate this pack.");
-      }
-
-      const createdJob = (await response.json()) as {
-        job_id: string;
-        status: GenerationJob["status"];
-      };
-      setGenerationJob({
-        job_id: createdJob.job_id,
-        status: createdJob.status,
-        steps: [],
-        pack: null,
-        error: null,
-      });
-
-      const nextPack = await pollGenerationJob(createdJob.job_id);
-      setPack(nextPack);
-      setShowMatches(true);
-      setMatchOverrides({});
-      setBoard({
-        [tiers[0]?.id ?? "tier-s"]: nextPack.items.slice(0, 2),
-        [tiers[1]?.id ?? "tier-a"]: nextPack.items.slice(2, 4),
-        [tiers[2]?.id ?? "tier-b"]: nextPack.items.slice(4, 6),
-      });
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : "Unknown generation error.",
-      );
-    } finally {
-      setIsGenerating(false);
-    }
-  }
-
-  function updateMatchOverride(
-    itemName: string,
-    action: "keep" | "text" | "image_url",
-    value?: string,
-  ) {
-    setMatchOverrides((current) => {
-      const next = { ...current };
-      if (action === "keep") {
-        delete next[itemName];
-      } else if (action === "text") {
-        next[itemName] = "text";
-      } else if (value?.trim()) {
-        next[itemName] = `image_url:${value.trim()}`;
-      }
-      return next;
+    setBoard({
+      [tiers[0]?.id ?? "tier-s"]: nextPack.items.slice(0, 2),
+      [tiers[1]?.id ?? "tier-a"]: nextPack.items.slice(2, 4),
+      [tiers[2]?.id ?? "tier-b"]: nextPack.items.slice(4, 6),
     });
   }
 
   function applyMatchOverrides() {
-    void generatePack(matchOverrides);
+    void handleGeneratePack(matchOverrides);
   }
 
   function selectPreset(nextPreset: string) {
@@ -779,7 +707,7 @@ export default function Home() {
             </div>
             <button
               type="button"
-              onClick={() => generatePack()}
+              onClick={() => handleGeneratePack()}
               disabled={isGenerating || itemCount === 0}
             >
               {isGenerating ? "Generating..." : "Generate pack"}

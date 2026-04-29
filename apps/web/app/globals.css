@@ -785,6 +785,10 @@ button.secondary-action {
     #151515;
 }
 
+.match-row.manual-image {
+  border-color: rgba(184, 255, 111, 0.32);
+}
+
 .match-row img {
   width: 42px;
   height: 42px;
@@ -820,7 +824,7 @@ button.secondary-action {
 
 .match-pill {
   display: inline-grid;
-  min-width: 42px;
+  min-width: 60px;
   min-height: 22px;
   place-items: center;
   border: 1px solid rgba(184, 255, 111, 0.35);
@@ -868,6 +872,48 @@ button.secondary-action {
 .match-actions a:hover {
   color: #fff;
   text-decoration: underline;
+}
+
+.replace-match {
+  position: relative;
+  display: inline-grid;
+  min-height: 24px;
+  place-items: center;
+  border: 1px solid #333;
+  border-radius: 999px;
+  background: #1d1d1d;
+  color: rgba(255, 255, 255, 0.54);
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 900;
+  text-transform: none;
+  cursor: text;
+}
+
+.replace-match input {
+  position: absolute;
+  right: 0;
+  top: calc(100% + 6px);
+  z-index: 10;
+  width: 190px;
+  height: 28px;
+  border: 1px solid #444;
+  border-radius: 5px;
+  background: #080808;
+  color: #f6f6f6;
+  padding: 0 8px;
+  font-size: 10px;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.replace-match:focus-within input,
+.replace-match:hover input {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0);
 }
 
 .agent-run {

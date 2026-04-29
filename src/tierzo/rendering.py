@@ -195,9 +195,23 @@ def draw_image_card(
     *,
     background: str = "#050505",
     accent_color: str | None = None,
+    label_text: str | None = None,
+    label_position: str = "none",
+    text_color: str = "#FFFFFF",
+    font_path: Path | None = None,
 ) -> None:
     with Image.open(source_path) as source:
         image = ImageOps.fit(source.convert("RGB"), (image_size, image_size), method=Image.Resampling.LANCZOS)
+
+    if label_text and label_position != "none":
+        image = draw_image_label(
+            image,
+            label_text,
+            position=label_position,
+            text_color=text_color,
+            font_path=font_path,
+            background=background,
+        )
 
     if accent_color:
         draw = ImageDraw.Draw(image)
@@ -214,6 +228,74 @@ def draw_image_card(
         image = canvas
 
     image.save(output_path, format="PNG")
+
+
+def draw_image_label(
+    image: Image.Image,
+    text: str,
+    *,
+    position: str,
+    text_color: str,
+    font_path: Path | None,
+    background: str,
+) -> Image.Image:
+    image = image.convert("RGBA")
+    image_size = image.width
+    band_height = max(image_size // 5, 96)
+    padding = max(18, image_size // 36)
+    font = get_font(font_path, max(28, image_size // 14))
+    draw = ImageDraw.Draw(image)
+    max_width = image_size - padding * 2
+
+    for font_size in range(max(28, image_size // 14), MIN_FONT_SIZE - 1, -2):
+        font = get_font(font_path, font_size)
+        lines = wrap_text(draw, text, font, max_width)
+        _, text_height = measure_text_block(draw, lines, font)
+        if text_height <= band_height - padding:
+            break
+
+    line_boxes = [draw.textbbox((0, 0), line or " ", font=font) for line in lines]
+    line_heights = [box[3] - box[1] for box in line_boxes]
+    line_height = max(line_heights) if line_heights else 0
+    line_spacing = max(4, int(line_height * LINE_SPACING_RATIO))
+    block_height = sum(line_heights) + max(0, len(lines) - 1) * line_spacing
+
+    if position == "top":
+        band = (0, 0, image_size, band_height)
+        y = (band_height - block_height) / 2
+    elif position == "bottom":
+        band = (0, image_size - band_height, image_size, image_size)
+        y = image_size - band_height + (band_height - block_height) / 2
+    else:
+        band = (0, image_size - band_height, image_size, image_size)
+        y = image_size - band_height + (band_height - block_height) / 2
+
+    overlay = Image.new("RGBA", (image_size, image_size), (0, 0, 0, 0))
+    overlay_draw = ImageDraw.Draw(overlay)
+    if position == "overlay":
+        overlay_draw.rectangle(band, fill=hex_to_rgba("#000000", 150))
+    else:
+        overlay_draw.rectangle(band, fill=hex_to_rgba(background, 225))
+    image = Image.alpha_composite(image, overlay)
+
+    for index, line in enumerate(lines):
+        box = line_boxes[index]
+        width = box[2] - box[0]
+        x = (image_size - width) / 2
+        draw_text_layer(
+            image,
+            line,
+            font,
+            (x, y),
+            fill=text_color,
+            italic=False,
+            underline=False,
+            strike=False,
+            image_size=image_size,
+        )
+        y += line_heights[index] + line_spacing
+
+    return image.convert("RGB")
 
 
 def draw_text_layer(

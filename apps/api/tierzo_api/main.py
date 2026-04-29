@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable
 
+import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
@@ -14,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from tierzo.agentic import IntakePlan, plan_intake
 from tierzo.export import generate_pack, zip_pack
-from tierzo.enrichers import TmdbMovieEnricher
+from tierzo.enrichers import EnrichedAsset, TmdbMovieEnricher
 from tierzo.parsers import parse_text_lines
 from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
@@ -105,6 +106,7 @@ class CardStyleRequest(BaseModel):
     border_width: int = Field(default=4, ge=0, le=16)
     corner_radius: int = Field(default=8, ge=0, le=48)
     glow_blur: int = Field(default=0, ge=0, le=32)
+    image_label_position: str = Field(default="none", pattern=r"^(none|top|bottom|overlay)$")
 
 
 class GeneratePackRequest(BaseModel):
@@ -341,6 +343,7 @@ def build_pack(
             underline=payload.custom_preset.underline,
             strike=payload.custom_preset.strike,
             text_shadow=payload.custom_preset.text_shadow,
+            image_label_position=payload.custom_preset.image_label_position,
         )
 
     pack_id = uuid.uuid4().hex
@@ -357,6 +360,11 @@ def build_pack(
         for name, action in payload.asset_overrides.items()
         if action == "text"
     }
+    manual_image_urls = {
+        name: action.removeprefix("image_url:")
+        for name, action in payload.asset_overrides.items()
+        if action.startswith("image_url:")
+    }
     if enrichment_mode == "tmdb_movie":
         api_key = os.getenv("TMDB_API_KEY")
         if api_key:
@@ -367,6 +375,11 @@ def build_pack(
                 for value in force_text_values:
                     if enriched_assets:
                         enriched_assets.pop(value, None)
+                enriched_assets = apply_manual_image_overrides(
+                    enriched_assets or {},
+                    manual_image_urls,
+                    output_dir / "_manual_sources",
+                )
                 enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(values)}"
             except Exception:
                 enriched_assets = None
@@ -390,6 +403,14 @@ def build_pack(
             )
         )
         progress_callback(f"assets_{asset_status}", asset_detail)
+
+    if enrichment_mode != "tmdb_movie" and manual_image_urls:
+        enriched_assets = apply_manual_image_overrides(
+            enriched_assets or {},
+            manual_image_urls,
+            output_dir / "_manual_sources",
+        )
+        enrichment_status = f"manual_image:{len(enriched_assets)}/{len(values)}"
 
     if progress_callback:
         progress_callback("render_running", f"Rendering {len(values)} cards.")
@@ -427,6 +448,7 @@ def build_pack(
                 "border_width": preset.border_width,
                 "corner_radius": preset.corner_radius,
                 "glow_blur": preset.glow_blur,
+                "image_label_position": preset.image_label_position,
             },
         },
     )
@@ -465,6 +487,40 @@ def build_pack(
         enrichment_status=enrichment_status,
         agent_plan=agent_plan.to_dict() if agent_plan else None,
     )
+
+
+def apply_manual_image_overrides(
+    enriched_assets: dict[str, EnrichedAsset],
+    manual_image_urls: dict[str, str],
+    image_dir: Path,
+) -> dict[str, EnrichedAsset]:
+    if not manual_image_urls:
+        return enriched_assets
+
+    image_dir.mkdir(parents=True, exist_ok=True)
+    next_assets = dict(enriched_assets)
+    for item_name, image_url in manual_image_urls.items():
+        try:
+            response = httpx.get(image_url, timeout=12.0, follow_redirects=True)
+            response.raise_for_status()
+            content_type = response.headers.get("content-type", "")
+            if content_type and not content_type.startswith("image/"):
+                continue
+            image_path = image_dir / f"manual-{uuid.uuid4().hex}.img"
+            image_path.write_bytes(response.content)
+            next_assets[item_name] = EnrichedAsset(
+                query=item_name,
+                title=item_name,
+                source_type="manual-url",
+                source_value=image_url,
+                source_url=image_url,
+                image_path=image_path,
+                confidence=1.0,
+            )
+        except Exception:
+            continue
+
+    return next_assets
 
 
 @app.post("/packs", response_model=GeneratePackResponse)

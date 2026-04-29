@@ -1,0 +1,90 @@
+export type PackItem = {
+  id: string;
+  name: string;
+  filename: string;
+  image_url: string;
+  asset_kind: string;
+  source_type: string;
+  source_value: string | null;
+  source_url: string | null;
+  confidence: number | null;
+};
+
+export type PackResponse = {
+  pack_id: string;
+  title: string;
+  description: string | null;
+  row_labels: string[];
+  item_count: number;
+  items: PackItem[];
+  manifest_url: string;
+  zip_url: string;
+  extension_url: string;
+  enrichment_status: string;
+  agent_plan: {
+    domain: string;
+    tool: string;
+    confidence: number;
+    source: string;
+    cache_hit: boolean;
+  } | null;
+};
+
+export type JobStep = {
+  id: string;
+  label: string;
+  status: "pending" | "running" | "done" | "warning" | "error";
+  detail: string | null;
+};
+
+export type GenerationJob = {
+  job_id: string;
+  status: "queued" | "running" | "completed" | "failed";
+  steps: JobStep[];
+  pack: PackResponse | null;
+  error: string | null;
+};
+
+export type MatchOverrides = Record<string, "text" | `image_url:${string}`>;
+
+export type CardStyle = {
+  background: string;
+  textColor: string;
+  accentColor: string;
+  fontKey: string;
+  bold: boolean;
+  italic: boolean;
+  underline: boolean;
+  strike: boolean;
+  textShadow: boolean;
+  backgroundOpacity: number;
+  borderWidth: number;
+  cornerRadius: number;
+  glowBlur: number;
+  imageLabelPosition: "none" | "top" | "bottom" | "overlay";
+};
+
+export type TierRow = {
+  id: string;
+  label: string;
+};
+
+export type RowMenu = {
+  tierId: string;
+  x: number;
+  y: number;
+} | null;
+
+export type BoardState = Record<string, PackItem[]>;
+
+export type SavedDemoState = {
+  text: string;
+  title: string;
+  description: string;
+  preset: string;
+  cardStyle: CardStyle;
+  enrichmentMode: string;
+  tiers: TierRow[];
+  board: BoardState;
+  pack: PackResponse | null;
+};

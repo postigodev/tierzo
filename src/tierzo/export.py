@@ -38,6 +38,10 @@ def generate_pack(
                 size,
                 background=preset.background,
                 accent_color=preset.accent_color,
+                label_text=text,
+                label_position=preset.image_label_position,
+                text_color=preset.text_color,
+                font_path=preset.font_path,
             )
         else:
             draw_centered_text(text=text, output_path=output_path, image_size=size, preset=preset)

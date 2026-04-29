@@ -20,6 +20,7 @@ class TextCardPreset:
     underline: bool = False
     strike: bool = False
     text_shadow: bool = False
+    image_label_position: str = "none"
 
 
 PRESETS: dict[str, TextCardPreset] = {

@@ -4,277 +4,40 @@ import Image from "next/image";
 import type { CSSProperties, DragEvent, MouseEvent } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
-type PackItem = {
-  id: string;
-  name: string;
-  filename: string;
-  image_url: string;
-  asset_kind: string;
-  source_type: string;
-  source_value: string | null;
-  source_url: string | null;
-  confidence: number | null;
-};
-
-type PackResponse = {
-  pack_id: string;
-  title: string;
-  description: string | null;
-  row_labels: string[];
-  item_count: number;
-  items: PackItem[];
-  manifest_url: string;
-  zip_url: string;
-  extension_url: string;
-  enrichment_status: string;
-  agent_plan: {
-    domain: string;
-    tool: string;
-    confidence: number;
-    source: string;
-    cache_hit: boolean;
-  } | null;
-};
-
-type JobStep = {
-  id: string;
-  label: string;
-  status: "pending" | "running" | "done" | "warning" | "error";
-  detail: string | null;
-};
-
-type GenerationJob = {
-  job_id: string;
-  status: "queued" | "running" | "completed" | "failed";
-  steps: JobStep[];
-  pack: PackResponse | null;
-  error: string | null;
-};
-
-type MatchOverrides = Record<string, "text">;
-
-const API_BASE =
-  process.env.NEXT_PUBLIC_TIERZO_API_URL ?? "http://localhost:8000";
-
-const SAMPLE_LIST = `Silent Hill 2
-Resident Evil 4
-Fatal Frame II
-Rule of Rose
-Kuon
-Siren
-Haunting Ground
-Clock Tower 3`;
-
-type CardStyle = {
-  background: string;
-  textColor: string;
-  accentColor: string;
-  fontKey: string;
-  bold: boolean;
-  italic: boolean;
-  underline: boolean;
-  strike: boolean;
-  textShadow: boolean;
-  backgroundOpacity: number;
-  borderWidth: number;
-  cornerRadius: number;
-  glowBlur: number;
-};
-
-const BASE_CARD_STYLE = {
-  bold: true,
-  italic: false,
-  underline: false,
-  strike: false,
-  textShadow: false,
-  backgroundOpacity: 100,
-  borderWidth: 4,
-  cornerRadius: 8,
-  glowBlur: 0,
-};
-const PRESET_STYLES: Record<string, CardStyle> = {
-  arcade: {
-    ...BASE_CARD_STYLE,
-    background: "#101820",
-    textColor: "#FEE715",
-    accentColor: "#FEE715",
-    fontKey: "default",
-  },
-  clean: {
-    ...BASE_CARD_STYLE,
-    background: "#FFFFFF",
-    textColor: "#111111",
-    accentColor: "#DADADA",
-    fontKey: "default",
-    borderWidth: 2,
-  },
-  dark: {
-    ...BASE_CARD_STYLE,
-    background: "#111111",
-    textColor: "#FFFFFF",
-    accentColor: "#4B5563",
-    fontKey: "default",
-    textShadow: true,
-  },
-  bubblegum: {
-    ...BASE_CARD_STYLE,
-    background: "#FDE7F3",
-    textColor: "#241623",
-    accentColor: "#FF4F9A",
-    fontKey: "comic",
-    cornerRadius: 18,
-  },
-  "hero-hud": {
-    ...BASE_CARD_STYLE,
-    background: "#F2F0E8",
-    textColor: "#1E2633",
-    accentColor: "#F59E0B",
-    fontKey: "impact",
-    italic: true,
-    glowBlur: 8,
-  },
-  "mono-soul": {
-    ...BASE_CARD_STYLE,
-    background: "#050505",
-    textColor: "#FFFFFF",
-    accentColor: "#FF2E49",
-    fontKey: "consolas",
-    borderWidth: 3,
-    textShadow: true,
-  },
-  "creature-dex": {
-    ...BASE_CARD_STYLE,
-    background: "#2B6DE8",
-    textColor: "#FFF6A8",
-    accentColor: "#FFCB05",
-    fontKey: "trebuchet",
-    cornerRadius: 14,
-    glowBlur: 6,
-  },
-  "cyber-mint": {
-    ...BASE_CARD_STYLE,
-    background: "#071E22",
-    textColor: "#D8FFF3",
-    accentColor: "#25F4C8",
-    fontKey: "bahnschrift",
-    backgroundOpacity: 88,
-    glowBlur: 16,
-    textShadow: true,
-  },
-  "blood-moon": {
-    ...BASE_CARD_STYLE,
-    background: "#21070A",
-    textColor: "#FFE8D6",
-    accentColor: "#D72638",
-    fontKey: "georgia",
-    cornerRadius: 4,
-    glowBlur: 10,
-  },
-};
-const PRESETS = Object.keys(PRESET_STYLES);
-const FONT_OPTIONS = [
-  {
-    css: "Arial, Helvetica, sans-serif",
-    label: "Arial / Default",
-    value: "default",
-  },
-  {
-    css: "Impact, Haettenschweiler, 'Arial Narrow Bold', sans-serif",
-    label: "Impact",
-    value: "impact",
-  },
-  {
-    css: "Consolas, 'Courier New', monospace",
-    label: "Consolas Bold",
-    value: "consolas",
-  },
-  {
-    css: "'Trebuchet MS', Verdana, sans-serif",
-    label: "Trebuchet MS Bold",
-    value: "trebuchet",
-  },
-  {
-    css: "Bahnschrift, 'Arial Narrow', sans-serif",
-    label: "Bahnschrift",
-    value: "bahnschrift",
-  },
-  {
-    css: "Georgia, 'Times New Roman', serif",
-    label: "Georgia Bold",
-    value: "georgia",
-  },
-  {
-    css: "'Comic Sans MS', 'Comic Sans', cursive",
-    label: "Comic Sans Bold",
-    value: "comic",
-  },
-  {
-    css: "Verdana, Geneva, sans-serif",
-    label: "Verdana Bold",
-    value: "verdana",
-  },
-];
-const FONT_STACKS = Object.fromEntries(
-  FONT_OPTIONS.map((option) => [option.value, option.css]),
-);
-const LEGACY_FONT_KEYS: Record<string, string> = {
-  condensed: "bahnschrift",
-  mono: "consolas",
-  rounded: "trebuchet",
-  "sans-serif": "default",
-  serif: "georgia",
-};
-const MAX_TIERS = 10;
-const DEFAULT_TIERS = [
-  { id: "tier-s", label: "S" },
-  { id: "tier-a", label: "A" },
-  { id: "tier-b", label: "B" },
-  { id: "tier-c", label: "C" },
-  { id: "tier-d", label: "D" },
-];
-
-type TierRow = {
-  id: string;
-  label: string;
-};
-
-type RowMenu = {
-  tierId: string;
-  x: number;
-  y: number;
-} | null;
-
-type BoardState = Record<string, PackItem[]>;
-
-type SavedDemoState = {
-  text: string;
-  title: string;
-  description: string;
-  preset: string;
-  cardStyle: CardStyle;
-  enrichmentMode: string;
-  tiers: TierRow[];
-  board: BoardState;
-  pack: PackResponse | null;
-};
-
-const BOARD_STORAGE_KEY = "tierzo.demo.v1";
-const TIER_COLORS = [
-  "#ff747a",
-  "#ffc07a",
-  "#ffe082",
-  "#ffff72",
-  "#b8ff6f",
-  "#ff747a",
-  "#ffc07a",
-  "#ffe082",
-  "#ffff72",
-  "#b8ff6f",
-];
-
-function apiUrl(path: string) {
-  return `${API_BASE}${path}`;
-}
+import { apiUrl } from "../lib/api";
+import {
+  BASE_CARD_STYLE,
+  BOARD_STORAGE_KEY,
+  DEFAULT_TIERS,
+  FONT_OPTIONS,
+  FONT_STACKS,
+  LEGACY_FONT_KEYS,
+  MAX_TIERS,
+  PRESETS,
+  PRESET_STYLES,
+  SAMPLE_LIST,
+} from "../lib/constants";
+import { renderBoardPng, slugify } from "../lib/export-board-png";
+import {
+  formatGenerationStatus,
+  formatJobStatus,
+  formatMatchQuality,
+  formatMatchSource,
+  formatStepIcon,
+  formatToolName,
+} from "../lib/formatters";
+import { hexToRgba, textDecoration } from "../lib/style-utils";
+import type {
+  BoardState,
+  CardStyle,
+  GenerationJob,
+  MatchOverrides,
+  PackItem,
+  PackResponse,
+  RowMenu,
+  SavedDemoState,
+  TierRow,
+} from "../lib/types";
 
 export default function Home() {
   const [text, setText] = useState(SAMPLE_LIST);
@@ -340,6 +103,7 @@ export default function Home() {
           borderWidth: savedStyle.borderWidth ?? 4,
           cornerRadius: savedStyle.cornerRadius ?? 8,
           glowBlur: savedStyle.glowBlur ?? 0,
+          imageLabelPosition: savedStyle.imageLabelPosition ?? "none",
         });
       }
       if (Array.isArray(parsed.tiers) && parsed.tiers.length > 0) {
@@ -412,6 +176,7 @@ export default function Home() {
         border_width: cardStyle.borderWidth,
         corner_radius: cardStyle.cornerRadius,
         glow_blur: cardStyle.glowBlur,
+        image_label_position: cardStyle.imageLabelPosition,
       },
     };
   }
@@ -487,13 +252,19 @@ export default function Home() {
     }
   }
 
-  function updateMatchOverride(itemName: string, action: "keep" | "text") {
+  function updateMatchOverride(
+    itemName: string,
+    action: "keep" | "text" | "image_url",
+    value?: string,
+  ) {
     setMatchOverrides((current) => {
       const next = { ...current };
       if (action === "keep") {
         delete next[itemName];
-      } else {
+      } else if (action === "text") {
         next[itemName] = "text";
+      } else if (value?.trim()) {
+        next[itemName] = `image_url:${value.trim()}`;
       }
       return next;
     });
@@ -1102,6 +873,23 @@ export default function Home() {
                   }
                 />
               </label>
+              <label className="card-lab-field card-lab-field-full">
+                Poster title
+                <select
+                  value={cardStyle.imageLabelPosition}
+                  onChange={(event) =>
+                    updateCardStyle({
+                      imageLabelPosition: event.target
+                        .value as CardStyle["imageLabelPosition"],
+                    })
+                  }
+                >
+                  <option value="none">Image only</option>
+                  <option value="overlay">Overlay bottom</option>
+                  <option value="bottom">Bottom label</option>
+                  <option value="top">Top label</option>
+                </select>
+              </label>
             </div>
             <button
               type="button"
@@ -1202,7 +990,11 @@ function MatchesPanel({
 }: {
   isApplying: boolean;
   onApply: () => void;
-  onOverride: (itemName: string, action: "keep" | "text") => void;
+  onOverride: (
+    itemName: string,
+    action: "keep" | "text" | "image_url",
+    value?: string,
+  ) => void;
   overrides: MatchOverrides;
   pack: PackResponse;
 }) {
@@ -1231,10 +1023,14 @@ function MatchesPanel({
       <div className="matches-list">
         {pack.items.map((item) => {
           const isForcedText = overrides[item.name] === "text";
+          const manualUrl = overrides[item.name]?.startsWith("image_url:")
+            ? overrides[item.name].replace("image_url:", "")
+            : "";
+          const isManualImage = Boolean(manualUrl);
 
           return (
             <article
-              className={`match-row ${isForcedText ? "forced-text" : ""}`}
+              className={`match-row ${isForcedText ? "forced-text" : ""} ${isManualImage ? "manual-image" : ""}`}
               key={item.id}
             >
               <Image
@@ -1248,28 +1044,52 @@ function MatchesPanel({
                 <strong>{item.name}</strong>
                 <span>
                   {isForcedText
-                    ? "Will regenerate as a text card."
-                    : formatMatchSource(item)}
+                    ? "Queued: regenerate this as a text card."
+                    : isManualImage
+                      ? "Queued: replace with your image URL."
+                      : formatMatchSource(item)}
                 </span>
               </div>
               <span className={`match-pill ${isForcedText ? "text-card" : item.asset_kind}`}>
-                {isForcedText ? "Text" : formatConfidence(item)}
+                {isForcedText
+                  ? "Text card"
+                  : isManualImage
+                    ? "Manual"
+                    : formatMatchQuality(item)}
               </span>
               <div className="match-actions">
                 <button
                   type="button"
-                  className={isForcedText ? "" : "active"}
+                  className={!isForcedText && !isManualImage ? "active" : ""}
                   onClick={() => onOverride(item.name, "keep")}
+                  title="Use the image match Tierzo found."
                 >
-                  Keep
+                  Use image
                 </button>
                 <button
                   type="button"
                   className={isForcedText ? "active" : ""}
                   onClick={() => onOverride(item.name, "text")}
+                  title="Ignore this image and render a normal text card."
                 >
-                  Text
+                  Use text
                 </button>
+                <label className="replace-match">
+                  Replace
+                  <input
+                    type="url"
+                    placeholder="Paste image URL"
+                    defaultValue={manualUrl}
+                    onBlur={(event) =>
+                      onOverride(item.name, "image_url", event.target.value)
+                    }
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.currentTarget.blur();
+                      }
+                    }}
+                  />
+                </label>
                 {item.source_url ? (
                   <a href={item.source_url} rel="noreferrer" target="_blank">
                     Source
@@ -1365,281 +1185,4 @@ function Card({
       <figcaption>{item.name}</figcaption>
     </figure>
   );
-}
-
-async function renderBoardPng({
-  board,
-  tiers,
-  title,
-}: {
-  board: BoardState;
-  tiers: TierRow[];
-  title: string;
-}) {
-  const width = 1200;
-  const labelWidth = 118;
-  const rowMinHeight = 132;
-  const cardSize = 86;
-  const cardGap = 10;
-  const itemPadding = 12;
-  const titleHeight = 86;
-  const footerHeight = 34;
-  const contentWidth = width - labelWidth;
-  const cardsPerRow = Math.max(
-    1,
-    Math.floor(
-      (contentWidth - itemPadding * 2 + cardGap) / (cardSize + cardGap),
-    ),
-  );
-  const rowHeights = tiers.map((tier) => {
-    const itemCount = board[tier.id]?.length ?? 0;
-    const rows = Math.max(1, Math.ceil(itemCount / cardsPerRow));
-    return Math.max(
-      rowMinHeight,
-      itemPadding * 2 + rows * cardSize + (rows - 1) * cardGap,
-    );
-  });
-  const height =
-    titleHeight +
-    rowHeights.reduce((sum, rowHeight) => sum + rowHeight, 0) +
-    footerHeight;
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  const context = canvas.getContext("2d");
-  if (!context) {
-    throw new Error("Canvas export is not available in this browser.");
-  }
-
-  context.fillStyle = "#0d0d0d";
-  context.fillRect(0, 0, width, height);
-  context.fillStyle = "#f6f6f6";
-  context.font = "800 36px Arial, Helvetica, sans-serif";
-  context.fillText(title, 28, 54);
-  context.fillStyle = "rgba(255,255,255,0.34)";
-  context.font = "700 15px Arial, Helvetica, sans-serif";
-  context.fillText("Generated with Tierzo", 28, 76);
-
-  let y = titleHeight;
-  for (const [tierIndex, tier] of tiers.entries()) {
-    const rowHeight = rowHeights[tierIndex];
-    context.fillStyle = "#151515";
-    context.fillRect(labelWidth, y, width - labelWidth, rowHeight);
-    context.strokeStyle = "#262626";
-    context.lineWidth = 1;
-    context.strokeRect(labelWidth, y, width - labelWidth, rowHeight);
-    context.fillStyle = TIER_COLORS[tierIndex % TIER_COLORS.length];
-    context.fillRect(0, y, labelWidth, rowHeight);
-    context.strokeStyle = "#050505";
-    context.strokeRect(0, y, labelWidth, rowHeight);
-
-    drawWrappedText(
-      context,
-      tier.label || "-",
-      labelWidth / 2,
-      y + rowHeight / 2,
-      labelWidth - 26,
-      26,
-      "#000",
-      "800 24px Arial, Helvetica, sans-serif",
-      "center",
-    );
-
-    const items = board[tier.id] ?? [];
-    for (const [itemIndex, item] of items.entries()) {
-      const column = itemIndex % cardsPerRow;
-      const row = Math.floor(itemIndex / cardsPerRow);
-      const x = labelWidth + itemPadding + column * (cardSize + cardGap);
-      const imageY = y + itemPadding + row * (cardSize + cardGap);
-      const image = await loadImage(apiUrl(item.image_url));
-      context.fillStyle = "#050505";
-      context.fillRect(x - 2, imageY - 2, cardSize + 4, cardSize + 4);
-      context.drawImage(image, x, imageY, cardSize, cardSize);
-    }
-
-    y += rowHeight;
-  }
-
-  context.fillStyle = "rgba(255,255,255,0.28)";
-  context.font = "700 13px Arial, Helvetica, sans-serif";
-  context.textAlign = "left";
-  context.textBaseline = "alphabetic";
-  context.fillText("tierzo.dev-ready export", 28, height - 14);
-  return canvas.toDataURL("image/png");
-}
-
-function drawWrappedText(
-  context: CanvasRenderingContext2D,
-  text: string,
-  x: number,
-  centerY: number,
-  maxWidth: number,
-  lineHeight: number,
-  color: string,
-  font: string,
-  align: CanvasTextAlign,
-) {
-  context.font = font;
-  context.textAlign = align;
-  context.textBaseline = "middle";
-  context.fillStyle = color;
-  const words = text.split(/\s+/).filter(Boolean);
-  const lines: string[] = [];
-  let currentLine = "";
-  for (const word of words.length > 0 ? words : [text]) {
-    if (context.measureText(word).width > maxWidth) {
-      if (currentLine) {
-        lines.push(currentLine);
-        currentLine = "";
-      }
-      lines.push(...splitLongWord(context, word, maxWidth));
-      continue;
-    }
-
-    const candidate = currentLine ? `${currentLine} ${word}` : word;
-    if (context.measureText(candidate).width <= maxWidth || !currentLine) {
-      currentLine = candidate;
-    } else {
-      lines.push(currentLine);
-      currentLine = word;
-    }
-  }
-  if (currentLine) {
-    lines.push(currentLine);
-  }
-
-  const firstY = centerY - ((lines.length - 1) * lineHeight) / 2;
-  for (const [index, line] of lines.entries()) {
-    context.fillText(line, x, firstY + index * lineHeight);
-  }
-}
-
-function splitLongWord(
-  context: CanvasRenderingContext2D,
-  word: string,
-  maxWidth: number,
-) {
-  const chunks: string[] = [];
-  let currentChunk = "";
-  for (const character of word) {
-    const candidate = `${currentChunk}${character}`;
-    if (context.measureText(candidate).width <= maxWidth || !currentChunk) {
-      currentChunk = candidate;
-    } else {
-      chunks.push(currentChunk);
-      currentChunk = character;
-    }
-  }
-  if (currentChunk) {
-    chunks.push(currentChunk);
-  }
-  return chunks;
-}
-
-function loadImage(src: string) {
-  return new Promise<HTMLImageElement>((resolve, reject) => {
-    const image = new window.Image();
-    image.crossOrigin = "anonymous";
-    image.onload = () => resolve(image);
-    image.onerror = () => reject(new Error(`Could not load ${src}`));
-    image.src = src;
-  });
-}
-
-function slugify(value: string) {
-  return (
-    value
-      .toLowerCase()
-      .replace(/[^a-z0-9]+/g, "-")
-      .replace(/(^-|-$)/g, "") || "tierzo"
-  );
-}
-
-function textDecoration(style: CardStyle) {
-  const decorations = [];
-  if (style.underline) decorations.push("underline");
-  if (style.strike) decorations.push("line-through");
-  return decorations.length > 0 ? decorations.join(" ") : "none";
-}
-
-function hexToRgba(hex: string, opacity: number) {
-  const normalized = hex.replace("#", "");
-  const red = Number.parseInt(normalized.slice(0, 2), 16);
-  const green = Number.parseInt(normalized.slice(2, 4), 16);
-  const blue = Number.parseInt(normalized.slice(4, 6), 16);
-  return `rgba(${red}, ${green}, ${blue}, ${Math.max(0.2, Math.min(1, opacity))})`;
-}
-
-function formatGenerationStatus(pack: PackResponse) {
-  const status = pack.enrichment_status;
-  if (status === "text") {
-    return `Generated ${pack.item_count} text cards.`;
-  }
-
-  const match = status.match(/^tmdb_movie:(\d+)\/(\d+)$/);
-  if (match) {
-    const matched = Number(match[1]);
-    const total = Number(match[2]);
-    const fallback = total - matched;
-    return fallback > 0
-      ? `Found ${matched}/${total} movie posters. ${fallback} used text cards.`
-      : `Found movie posters for all ${total} items.`;
-  }
-
-  if (status.includes("missing_api_key")) {
-    return "Movie posters need a TMDb key. Generated text cards instead.";
-  }
-
-  if (status.includes("error_fallback_text")) {
-    return "Movie poster lookup failed. Generated text cards instead.";
-  }
-
-  return status;
-}
-
-function formatToolName(tool: string) {
-  if (tool === "tmdb_movie") return "movie posters";
-  if (tool === "text") return "text cards";
-  if (tool === "steam") return "Steam assets";
-  if (tool === "spotify") return "Spotify assets";
-  return tool;
-}
-
-function formatMatchSource(item: PackItem) {
-  if (item.asset_kind === "text-card") {
-    return "Generated as a text card from your list.";
-  }
-
-  if (item.source_type === "tmdb") {
-    return `TMDb movie ${item.source_value ?? ""}`.trim();
-  }
-
-  return item.source_type || "External source";
-}
-
-function formatConfidence(item: PackItem) {
-  if (item.asset_kind === "text-card") {
-    return "Text";
-  }
-
-  if (item.confidence === null) {
-    return "Match";
-  }
-
-  return `${Math.round(item.confidence * 100)}%`;
-}
-
-function formatJobStatus(status: GenerationJob["status"]) {
-  if (status === "queued") return "Queued";
-  if (status === "running") return "Running checks";
-  if (status === "failed") return "Needs attention";
-  return "Done";
-}
-
-function formatStepIcon(status: JobStep["status"]) {
-  if (status === "done") return "✓";
-  if (status === "warning") return "!";
-  if (status === "error") return "x";
-  if (status === "running") return "↻";
-  return "·";
 }

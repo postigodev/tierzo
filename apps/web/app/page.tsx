@@ -3,8 +3,7 @@
 import type { CSSProperties } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
-import { AgentRunPanel } from "../components/agent-run-panel";
-import { MatchesPanel } from "../components/matches-panel";
+import { SourceTray } from "../components/source-tray";
 import { Card } from "../components/tier-card";
 import { usePackGeneration } from "../hooks/use-pack-generation";
 import { useTierBoard } from "../hooks/use-tier-board";
@@ -22,10 +21,6 @@ import {
   SAMPLE_LIST,
 } from "../lib/constants";
 import { renderBoardPng, slugify } from "../lib/export-board-png";
-import {
-  formatGenerationStatus,
-  formatToolName,
-} from "../lib/formatters";
 import { hexToRgba, textDecoration } from "../lib/style-utils";
 import type {
   CardStyle,
@@ -499,263 +494,30 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="source-tray">
-          <div>
-            <div className="source-copy">
-              <span>Source list</span>
-              <strong>{itemCount} items</strong>
-            </div>
-            <textarea
-              id="items"
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              spellCheck={false}
-            />
-          </div>
-          <div className="source-actions">
-            <label>
-              Preset
-              <select
-                value={preset}
-                onChange={(event) => selectPreset(event.target.value)}
-              >
-                {PRESETS.map((name) => (
-                  <option key={name} value={name}>
-                    {name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label className="mode-label">
-              <span className="mode-label-title">✦ Generate mode</span>
-              <select
-                aria-label="Generate mode"
-                value={enrichmentMode}
-                onChange={(event) => setEnrichmentMode(event.target.value)}
-              >
-                <option value="auto">Auto Agent</option>
-                <option value="text">Text cards only</option>
-                <option value="tmdb_movie">Movie posters</option>
-              </select>
-              <small>Let Tierzo pick text cards or source posters.</small>
-            </label>
-            <div className="card-lab" aria-label="Card Lab">
-              <div className="card-lab-preview" style={cardLabStyle}>
-                <span>Card Lab</span>
-              </div>
-              <div className="style-toggles" aria-label="Text style toggles">
-                <button
-                  type="button"
-                  className={cardStyle.bold ? "active" : ""}
-                  onClick={() => updateCardStyle({ bold: !cardStyle.bold })}
-                >
-                  B
-                </button>
-                <button
-                  type="button"
-                  className={cardStyle.italic ? "active" : ""}
-                  onClick={() => updateCardStyle({ italic: !cardStyle.italic })}
-                >
-                  I
-                </button>
-                <button
-                  type="button"
-                  className={cardStyle.underline ? "active" : ""}
-                  onClick={() =>
-                    updateCardStyle({ underline: !cardStyle.underline })
-                  }
-                >
-                  U
-                </button>
-                <button
-                  type="button"
-                  className={cardStyle.strike ? "active" : ""}
-                  onClick={() => updateCardStyle({ strike: !cardStyle.strike })}
-                >
-                  S
-                </button>
-                <button
-                  type="button"
-                  className={cardStyle.textShadow ? "active" : ""}
-                  onClick={() =>
-                    updateCardStyle({ textShadow: !cardStyle.textShadow })
-                  }
-                >
-                  Shadow
-                </button>
-              </div>
-              <label>
-                Background
-                <input
-                  type="color"
-                  value={cardStyle.background}
-                  onChange={(event) =>
-                    updateCardStyle({ background: event.target.value })
-                  }
-                />
-              </label>
-              <label>
-                Text
-                <input
-                  type="color"
-                  value={cardStyle.textColor}
-                  onChange={(event) =>
-                    updateCardStyle({ textColor: event.target.value })
-                  }
-                />
-              </label>
-              <label>
-                Accent
-                <input
-                  type="color"
-                  value={cardStyle.accentColor}
-                  onChange={(event) =>
-                    updateCardStyle({ accentColor: event.target.value })
-                  }
-                />
-              </label>
-              <label className="card-lab-field card-lab-field-full">
-                Font
-                <select
-                  value={cardStyle.fontKey}
-                  onChange={(event) =>
-                    updateCardStyle({ fontKey: event.target.value })
-                  }
-                >
-                  {FONT_OPTIONS.map((option) => (
-                    <option key={option.value} value={option.value}>
-                      {option.label}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <div className="card-lab-sliders">
-                <label>
-                  Border <strong>{cardStyle.borderWidth}px</strong>
-                  <input
-                    type="range"
-                    min="0"
-                    max="16"
-                    value={cardStyle.borderWidth}
-                    onChange={(event) =>
-                      updateCardStyle({
-                        borderWidth: Number(event.target.value),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Opacity <strong>{cardStyle.backgroundOpacity}%</strong>
-                  <input
-                    type="range"
-                    min="20"
-                    max="100"
-                    value={cardStyle.backgroundOpacity}
-                    onChange={(event) =>
-                      updateCardStyle({
-                        backgroundOpacity: Number(event.target.value),
-                      })
-                    }
-                  />
-                </label>
-                <label>
-                  Glow <strong>{cardStyle.glowBlur}px</strong>
-                  <input
-                    type="range"
-                    min="0"
-                    max="32"
-                    value={cardStyle.glowBlur}
-                    onChange={(event) =>
-                      updateCardStyle({
-                        glowBlur: Number(event.target.value),
-                      })
-                    }
-                  />
-                </label>
-              </div>
-              <label className="card-lab-field-full">
-                Radius <strong>{cardStyle.cornerRadius}px</strong>
-                <input
-                  type="range"
-                  min="0"
-                  max="48"
-                  value={cardStyle.cornerRadius}
-                  onChange={(event) =>
-                    updateCardStyle({
-                      cornerRadius: Number(event.target.value),
-                    })
-                  }
-                />
-              </label>
-              <label className="card-lab-field card-lab-field-full">
-                Poster title
-                <select
-                  value={cardStyle.imageLabelPosition}
-                  onChange={(event) =>
-                    updateCardStyle({
-                      imageLabelPosition: event.target
-                        .value as CardStyle["imageLabelPosition"],
-                    })
-                  }
-                >
-                  <option value="none">Image only</option>
-                  <option value="overlay">Overlay bottom</option>
-                  <option value="bottom">Bottom label</option>
-                  <option value="top">Top label</option>
-                </select>
-              </label>
-            </div>
-            <button
-              type="button"
-              onClick={() => handleGeneratePack()}
-              disabled={isGenerating || itemCount === 0}
-            >
-              {isGenerating ? "Generating..." : "Generate pack"}
-            </button>
-            {pack ? (
-              <button
-                className="secondary-action"
-                type="button"
-                onClick={() => setShowMatches((current) => !current)}
-              >
-                {showMatches ? "Hide matches" : "View matches"}
-              </button>
-            ) : null}
-            {pack ? (
-              <a className="secondary-action" href={apiUrl(pack.manifest_url)}>
-                Manifest
-              </a>
-            ) : null}
-            {pack ? (
-              <a className="secondary-action" href={apiUrl(pack.extension_url)}>
-                Extension JSON
-              </a>
-            ) : null}
-            {error ? <p className="error">{error}</p> : null}
-            {generationJob && generationJob.status !== "completed" ? (
-              <AgentRunPanel job={generationJob} />
-            ) : null}
-            {pack ? (
-              <p className="enrichment-status">{formatGenerationStatus(pack)}</p>
-            ) : null}
-            {pack?.agent_plan ? (
-              <p className="enrichment-status">
-                Tierzo read this as {pack.agent_plan.domain} and chose{" "}
-                {formatToolName(pack.agent_plan.tool)}
-                {pack.agent_plan.cache_hit ? " from cache" : ""}
-              </p>
-            ) : null}
-            {pack && showMatches ? (
-              <MatchesPanel
-                isApplying={isGenerating}
-                onApply={applyMatchOverrides}
-                onOverride={updateMatchOverride}
-                overrides={matchOverrides}
-                pack={pack}
-              />
-            ) : null}
-          </div>
-        </div>
+        <SourceTray
+          cardLabStyle={cardLabStyle}
+          cardStyle={cardStyle}
+          enrichmentMode={enrichmentMode}
+          error={error}
+          fontOptions={FONT_OPTIONS}
+          generationJob={generationJob}
+          isGenerating={isGenerating}
+          itemCount={itemCount}
+          matchOverrides={matchOverrides}
+          onApplyMatchOverrides={applyMatchOverrides}
+          onGeneratePack={() => void handleGeneratePack()}
+          onSelectPreset={selectPreset}
+          onSetEnrichmentMode={setEnrichmentMode}
+          onSetShowMatches={setShowMatches}
+          onSetText={setText}
+          onUpdateCardStyle={updateCardStyle}
+          onUpdateMatchOverride={updateMatchOverride}
+          pack={pack}
+          preset={preset}
+          presets={PRESETS}
+          showMatches={showMatches}
+          text={text}
+        />
 
         {rowMenu ? (
           <div

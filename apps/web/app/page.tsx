@@ -1,11 +1,12 @@
 "use client";
 
-import type { CSSProperties, MouseEvent } from "react";
+import type { CSSProperties } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import { AgentRunPanel } from "../components/agent-run-panel";
 import { MatchesPanel } from "../components/matches-panel";
 import { Card } from "../components/tier-card";
+import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
 import {
   BASE_CARD_STYLE,
@@ -26,32 +27,83 @@ import {
 } from "../lib/formatters";
 import { hexToRgba, textDecoration } from "../lib/style-utils";
 import type {
-  BoardState,
   CardStyle,
   GenerationJob,
   MatchOverrides,
   PackResponse,
-  RowMenu,
   SavedDemoState,
-  TierRow,
 } from "../lib/types";
 
+function resolveSavedCardStyle(
+  savedStyle?: (CardStyle & { fontFamily?: string }) | null,
+) {
+  if (!savedStyle) {
+    return PRESET_STYLES.arcade;
+  }
+
+  const savedFontKey =
+    savedStyle.fontKey ??
+    (savedStyle.fontFamily
+      ? LEGACY_FONT_KEYS[savedStyle.fontFamily]
+      : undefined) ??
+    "default";
+
+  return {
+    ...BASE_CARD_STYLE,
+    background: savedStyle.background,
+    textColor: savedStyle.textColor,
+    accentColor: savedStyle.accentColor,
+    fontKey: savedFontKey,
+    bold: savedStyle.bold ?? true,
+    italic: savedStyle.italic ?? false,
+    underline: savedStyle.underline ?? false,
+    strike: savedStyle.strike ?? false,
+    textShadow: savedStyle.textShadow ?? false,
+    backgroundOpacity: savedStyle.backgroundOpacity ?? 100,
+    borderWidth: savedStyle.borderWidth ?? 4,
+    cornerRadius: savedStyle.cornerRadius ?? 8,
+    glowBlur: savedStyle.glowBlur ?? 0,
+    imageLabelPosition: savedStyle.imageLabelPosition ?? "none",
+  };
+}
+
+function loadSavedDemoState() {
+  if (typeof window === "undefined") {
+    return null;
+  }
+
+  const saved = window.localStorage.getItem(BOARD_STORAGE_KEY);
+  if (!saved) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(saved) as SavedDemoState;
+  } catch {
+    window.localStorage.removeItem(BOARD_STORAGE_KEY);
+    return null;
+  }
+}
+
 export default function Home() {
-  const [text, setText] = useState(SAMPLE_LIST);
-  const [title, setTitle] = useState("PS2 Survival Horror Demo");
-  const [description, setDescription] = useState("");
-  const [tiers, setTiers] = useState(DEFAULT_TIERS);
-  const [selectedTierId, setSelectedTierId] = useState(DEFAULT_TIERS[0].id);
-  const [rowMenu, setRowMenu] = useState<RowMenu>(null);
-  const [draggedTierId, setDraggedTierId] = useState<string | null>(null);
-  const [dragOverTierId, setDragOverTierId] = useState<string | null>(null);
-  const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
-  const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
-  const [preset, setPreset] = useState("arcade");
-  const [enrichmentMode, setEnrichmentMode] = useState("auto");
-  const [cardStyle, setCardStyle] = useState<CardStyle>(PRESET_STYLES.arcade);
-  const [pack, setPack] = useState<PackResponse | null>(null);
-  const [board, setBoard] = useState<BoardState>({});
+  const savedState = useMemo(() => loadSavedDemoState(), []);
+  const [text, setText] = useState(() => savedState?.text ?? SAMPLE_LIST);
+  const [title, setTitle] = useState(
+    () => savedState?.title ?? "PS2 Survival Horror Demo",
+  );
+  const [description, setDescription] = useState(
+    () => savedState?.description ?? "",
+  );
+  const [preset, setPreset] = useState(() => savedState?.preset ?? "arcade");
+  const [enrichmentMode, setEnrichmentMode] = useState(
+    () => savedState?.enrichmentMode ?? "auto",
+  );
+  const [cardStyle, setCardStyle] = useState<CardStyle>(() =>
+    resolveSavedCardStyle(savedState?.cardStyle),
+  );
+  const [pack, setPack] = useState<PackResponse | null>(
+    () => savedState?.pack ?? null,
+  );
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isExporting, setIsExporting] = useState(false);
@@ -61,58 +113,39 @@ export default function Home() {
     null,
   );
   const deferredText = useDeferredValue(text);
-
-  useEffect(() => {
-    const saved = window.localStorage.getItem(BOARD_STORAGE_KEY);
-    if (!saved) {
-      return;
-    }
-
-    try {
-      const parsed = JSON.parse(saved) as SavedDemoState;
-      if (parsed.text) setText(parsed.text);
-      if (parsed.title) setTitle(parsed.title);
-      setDescription(parsed.description ?? "");
-      if (parsed.preset) setPreset(parsed.preset);
-      if (parsed.enrichmentMode) setEnrichmentMode(parsed.enrichmentMode);
-      if (parsed.cardStyle) {
-        const savedStyle = parsed.cardStyle as CardStyle & {
-          fontFamily?: string;
-        };
-        const savedFontKey =
-          savedStyle.fontKey ??
-          (savedStyle.fontFamily
-            ? LEGACY_FONT_KEYS[savedStyle.fontFamily]
-            : undefined) ??
-          "default";
-        setCardStyle({
-          ...BASE_CARD_STYLE,
-          background: savedStyle.background,
-          textColor: savedStyle.textColor,
-          accentColor: savedStyle.accentColor,
-          fontKey: savedFontKey,
-          bold: savedStyle.bold ?? true,
-          italic: savedStyle.italic ?? false,
-          underline: savedStyle.underline ?? false,
-          strike: savedStyle.strike ?? false,
-          textShadow: savedStyle.textShadow ?? false,
-          backgroundOpacity: savedStyle.backgroundOpacity ?? 100,
-          borderWidth: savedStyle.borderWidth ?? 4,
-          cornerRadius: savedStyle.cornerRadius ?? 8,
-          glowBlur: savedStyle.glowBlur ?? 0,
-          imageLabelPosition: savedStyle.imageLabelPosition ?? "none",
-        });
-      }
-      if (Array.isArray(parsed.tiers) && parsed.tiers.length > 0) {
-        setTiers(parsed.tiers.slice(0, MAX_TIERS));
-        setSelectedTierId(parsed.tiers[0].id);
-      }
-      if (parsed.pack) setPack(parsed.pack);
-      if (parsed.board) setBoard(parsed.board);
-    } catch {
-      window.localStorage.removeItem(BOARD_STORAGE_KEY);
-    }
-  }, []);
+  const {
+    benchItems,
+    board,
+    closeRowMenu,
+    dragOverItemId,
+    dragOverTierId,
+    draggedItemId,
+    draggedTierId,
+    insertTier,
+    moveDraggedTier,
+    moveItemToBench,
+    moveItemToTier,
+    openRowMenu,
+    rowMenu,
+    selectedTierId,
+    selectedTierIndex,
+    setBoard,
+    setDragOverItemId,
+    setDragOverTierId,
+    setDraggedItemId,
+    setDraggedTierId,
+    setSelectedTierId,
+    tiers,
+    updateTierLabel,
+    deleteSelectedTier,
+  } = useTierBoard({
+    initialBoard: savedState?.board,
+    initialSelectedTierId: savedState?.tiers?.[0]?.id,
+    initialTiers:
+      savedState?.tiers?.slice(0, MAX_TIERS).filter(Boolean) || DEFAULT_TIERS,
+    maxTiers: MAX_TIERS,
+    packItems: pack?.items ?? [],
+  });
 
   useEffect(() => {
     const nextState: SavedDemoState = {
@@ -271,23 +304,6 @@ export default function Home() {
     void generatePack(matchOverrides);
   }
 
-  const rankedIds = new Set(
-    Object.values(board)
-      .flat()
-      .map((item) => item.id),
-  );
-  const benchItems =
-    pack?.items.filter((item) => !rankedIds.has(item.id)) ?? [];
-  const selectedTierIndex = tiers.findIndex(
-    (tier) => tier.id === selectedTierId,
-  );
-
-  function updateTierLabel(id: string, label: string) {
-    setTiers((current) =>
-      current.map((tier) => (tier.id === id ? { ...tier, label } : tier)),
-    );
-  }
-
   function selectPreset(nextPreset: string) {
     setPreset(nextPreset);
     setCardStyle(PRESET_STYLES[nextPreset] ?? PRESET_STYLES.arcade);
@@ -319,133 +335,6 @@ export default function Home() {
     "--card-decoration": textDecoration(cardStyle),
   } as CSSProperties;
 
-  function makeTierLabel(position: number) {
-    return position < 5
-      ? ["S", "A", "B", "C", "D"][position]
-      : `Row ${position + 1}`;
-  }
-
-  function insertTier(offset: 0 | 1) {
-    if (tiers.length >= MAX_TIERS) {
-      return;
-    }
-
-    const anchorIndex =
-      selectedTierIndex >= 0 ? selectedTierIndex : tiers.length - 1;
-    const insertAt = anchorIndex + offset;
-    const newTier: TierRow = {
-      id: `tier-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-      label: makeTierLabel(tiers.length),
-    };
-
-    setTiers((current) => [
-      ...current.slice(0, insertAt),
-      newTier,
-      ...current.slice(insertAt),
-    ]);
-    setSelectedTierId(newTier.id);
-    setRowMenu(null);
-  }
-
-  function deleteSelectedTier() {
-    if (tiers.length <= 1 || selectedTierIndex < 0) {
-      return;
-    }
-
-    const removed = tiers[selectedTierIndex];
-    const nextSelected =
-      tiers[selectedTierIndex + 1] ?? tiers[selectedTierIndex - 1];
-
-    setTiers((current) => current.filter((tier) => tier.id !== removed.id));
-    setBoard((current) => {
-      const { [removed.id]: removedItems = [], ...rest } = current;
-      if (removedItems.length > 0 && nextSelected) {
-        rest[nextSelected.id] = [
-          ...(rest[nextSelected.id] ?? []),
-          ...removedItems,
-        ];
-      }
-      return rest;
-    });
-    setSelectedTierId(nextSelected.id);
-    setRowMenu(null);
-  }
-
-  function openRowMenu(event: MouseEvent, tierId: string) {
-    event.preventDefault();
-    setSelectedTierId(tierId);
-    setRowMenu({ tierId, x: event.clientX, y: event.clientY });
-  }
-
-  function moveDraggedTier(targetTierId: string) {
-    if (!draggedTierId || draggedTierId === targetTierId) {
-      return;
-    }
-
-    setTiers((current) => {
-      const draggedIndex = current.findIndex(
-        (tier) => tier.id === draggedTierId,
-      );
-      const targetIndex = current.findIndex((tier) => tier.id === targetTierId);
-      if (draggedIndex < 0 || targetIndex < 0) {
-        return current;
-      }
-
-      const next = [...current];
-      const [dragged] = next.splice(draggedIndex, 1);
-      next.splice(targetIndex, 0, dragged);
-      return next;
-    });
-    setDraggedTierId(null);
-    setDragOverTierId(null);
-  }
-
-  function moveItemToTier(
-    itemId: string,
-    targetTierId: string,
-    beforeItemId?: string,
-  ) {
-    const item = pack?.items.find((candidate) => candidate.id === itemId);
-    if (!item) {
-      return;
-    }
-
-    setBoard((current) => {
-      const next: BoardState = {};
-      for (const [tierId, items] of Object.entries(current)) {
-        next[tierId] = items.filter((candidate) => candidate.id !== itemId);
-      }
-
-      const targetItems = [...(next[targetTierId] ?? [])];
-      const insertAt = beforeItemId
-        ? targetItems.findIndex((candidate) => candidate.id === beforeItemId)
-        : -1;
-      if (insertAt >= 0) {
-        targetItems.splice(insertAt, 0, item);
-      } else {
-        targetItems.push(item);
-      }
-      next[targetTierId] = targetItems;
-      return next;
-    });
-    setDraggedItemId(null);
-    setDragOverItemId(null);
-    setDragOverTierId(null);
-  }
-
-  function moveItemToBench(itemId: string) {
-    setBoard((current) => {
-      const next: BoardState = {};
-      for (const [tierId, items] of Object.entries(current)) {
-        next[tierId] = items.filter((candidate) => candidate.id !== itemId);
-      }
-      return next;
-    });
-    setDraggedItemId(null);
-    setDragOverItemId(null);
-    setDragOverTierId(null);
-  }
-
   async function exportBoardPng() {
     if (!pack) {
       return;
@@ -475,7 +364,7 @@ export default function Home() {
   }
 
   return (
-    <main className="tm-page" onClick={() => setRowMenu(null)}>
+    <main className="tm-page" onClick={closeRowMenu}>
       <nav className="topbar" aria-label="Tierzo demo navigation">
         <div className="pixel-mark" aria-hidden="true">
           <span />

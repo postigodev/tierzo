@@ -4,7 +4,7 @@ import type { CSSProperties } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
 import { SourceTray } from "../components/source-tray";
-import { Card } from "../components/tier-card";
+import { TierBoard } from "../components/tier-board";
 import { usePackGeneration } from "../hooks/use-pack-generation";
 import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
@@ -127,7 +127,6 @@ export default function Home() {
     openRowMenu,
     rowMenu,
     selectedTierId,
-    selectedTierIndex,
     setBoard,
     setDragOverItemId,
     setDragOverTierId,
@@ -347,152 +346,30 @@ export default function Home() {
           </div>
         </div>
 
-        <div className="board">
-          {tiers.map((tier, index) => (
-            <div
-              className={`tier-row ${selectedTierId === tier.id ? "selected" : ""} ${draggedTierId === tier.id ? "dragging" : ""}`}
-              key={tier.id}
-              onClick={() => setSelectedTierId(tier.id)}
-              onContextMenu={(event) => openRowMenu(event, tier.id)}
-              onDragEnter={() => setDragOverTierId(tier.id)}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setDragOverTierId(tier.id);
-              }}
-              onDragLeave={() =>
-                setDragOverTierId((current) =>
-                  current === tier.id ? null : current,
-                )
-              }
-              onDrop={(event) => {
-                event.preventDefault();
-                if (draggedItemId) {
-                  moveItemToTier(draggedItemId, tier.id);
-                  return;
-                }
-                moveDraggedTier(tier.id);
-              }}
-              data-drag-over={dragOverTierId === tier.id ? "true" : undefined}
-            >
-              <div className="tier-label-cell">
-                <button
-                  aria-label={`Drag tier ${index + 1}`}
-                  className="row-grip"
-                  draggable
-                  type="button"
-                  onDragStart={(event) => {
-                    event.dataTransfer.effectAllowed = "move";
-                    event.dataTransfer.setData("text/plain", tier.id);
-                    setSelectedTierId(tier.id);
-                    setDraggedTierId(tier.id);
-                  }}
-                  onDragEnd={() => {
-                    setDraggedTierId(null);
-                    setDragOverTierId(null);
-                  }}
-                />
-                <div
-                  aria-label={`Tier ${index + 1} label`}
-                  className="tier-label"
-                  contentEditable
-                  role="textbox"
-                  spellCheck={false}
-                  suppressContentEditableWarning
-                  onFocus={() => setSelectedTierId(tier.id)}
-                  onInput={(event) => {
-                    updateTierLabel(
-                      tier.id,
-                      event.currentTarget.textContent ?? "",
-                    );
-                  }}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter" && !event.shiftKey) {
-                      event.preventDefault();
-                    }
-                  }}
-                >
-                  {tier.label}
-                </div>
-              </div>
-              <div className="tier-items">
-                {(board[tier.id] ?? []).map((item) => (
-                  <Card
-                    dragOver={dragOverItemId === item.id}
-                    item={item}
-                    key={item.id}
-                    onDragEnd={() => {
-                      setDraggedItemId(null);
-                      setDragOverItemId(null);
-                    }}
-                    onDragStart={() => setDraggedItemId(item.id)}
-                    onDrop={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      if (draggedItemId) {
-                        moveItemToTier(draggedItemId, tier.id, item.id);
-                      }
-                    }}
-                    onDragOver={(event) => {
-                      event.preventDefault();
-                      event.stopPropagation();
-                      setDragOverItemId(item.id);
-                    }}
-                  />
-                ))}
-              </div>
-            </div>
-          ))}
-        </div>
-
-        <div className="toolbar" aria-label="Tierzo actions">
-          <strong className="row-count">
-            {tiers.length}/{MAX_TIERS}
-          </strong>
-        </div>
-
-        <div className="bench">
-          <div
-            className="bench-items"
-            onDragOver={(event) => {
-              event.preventDefault();
-            }}
-            onDrop={(event) => {
-              event.preventDefault();
-              if (draggedItemId) {
-                moveItemToBench(draggedItemId);
-              }
-            }}
-          >
-            {benchItems.length > 0 ? (
-              benchItems.map((item) => (
-                <Card
-                  dragOver={dragOverItemId === item.id}
-                  item={item}
-                  key={item.id}
-                  onDragEnd={() => {
-                    setDraggedItemId(null);
-                    setDragOverItemId(null);
-                  }}
-                  onDragStart={() => setDraggedItemId(item.id)}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    if (draggedItemId) {
-                      moveItemToBench(draggedItemId);
-                    }
-                  }}
-                  onDragOver={(event) => {
-                    event.preventDefault();
-                    event.stopPropagation();
-                    setDragOverItemId(item.id);
-                  }}
-                />
-              ))
-            ) : (
-              <span>Generated cards will land here.</span>
-            )}
-          </div>
-        </div>
+        <TierBoard
+          benchItems={benchItems}
+          board={board}
+          deleteSelectedTier={deleteSelectedTier}
+          dragOverItemId={dragOverItemId}
+          dragOverTierId={dragOverTierId}
+          draggedItemId={draggedItemId}
+          draggedTierId={draggedTierId}
+          insertTier={insertTier}
+          maxTiers={MAX_TIERS}
+          moveDraggedTier={moveDraggedTier}
+          moveItemToBench={moveItemToBench}
+          moveItemToTier={moveItemToTier}
+          onOpenRowMenu={openRowMenu}
+          onSelectTier={setSelectedTierId}
+          onSetDragOverItemId={setDragOverItemId}
+          onSetDragOverTierId={setDragOverTierId}
+          onSetDraggedItemId={setDraggedItemId}
+          onSetDraggedTierId={setDraggedTierId}
+          onUpdateTierLabel={updateTierLabel}
+          rowMenu={rowMenu}
+          selectedTierId={selectedTierId}
+          tiers={tiers}
+        />
 
         <SourceTray
           cardLabStyle={cardLabStyle}
@@ -519,39 +396,6 @@ export default function Home() {
           text={text}
         />
 
-        {rowMenu ? (
-          <div
-            className="row-menu"
-            style={{ left: rowMenu.x, top: rowMenu.y }}
-            onClick={(event) => event.stopPropagation()}
-            role="menu"
-          >
-            <button
-              role="menuitem"
-              type="button"
-              onClick={() => insertTier(0)}
-              disabled={tiers.length >= MAX_TIERS}
-            >
-              Add row above
-            </button>
-            <button
-              role="menuitem"
-              type="button"
-              onClick={() => insertTier(1)}
-              disabled={tiers.length >= MAX_TIERS}
-            >
-              Add row below
-            </button>
-            <button
-              role="menuitem"
-              type="button"
-              onClick={deleteSelectedTier}
-              disabled={tiers.length <= 1}
-            >
-              Delete row
-            </button>
-          </div>
-        ) : null}
       </section>
     </main>
   );

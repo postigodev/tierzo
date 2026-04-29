@@ -1,10 +1,87 @@
-"use client";
-
 import Image from "next/image";
+import {
+  AlertTriangle,
+  BadgeCheck,
+  CheckCircle2,
+  FileText,
+  ImageIcon,
+  ImagePlus,
+  type LucideIcon,
+} from "lucide-react";
 
 import { apiUrl } from "../lib/api";
-import { formatMatchQuality, formatMatchSource } from "../lib/formatters";
+import { formatMatchSource } from "../lib/formatters";
 import type { MatchOverrides, PackResponse } from "../lib/types";
+
+type MatchStatus = {
+  label: string;
+  className: string;
+  Icon: LucideIcon;
+};
+
+function getMatchStatus({
+  item,
+  isForcedText,
+  isManualImage,
+}: {
+  item: PackResponse["items"][number];
+  isForcedText: boolean;
+  isManualImage: boolean;
+}): MatchStatus {
+  if (isForcedText) {
+    return {
+      label: "Text card",
+      className: "text-card",
+      Icon: FileText,
+    };
+  }
+
+  if (isManualImage) {
+    return {
+      label: "Manual image",
+      className: "manual-image",
+      Icon: ImagePlus,
+    };
+  }
+
+  if (item.asset_kind === "text-card") {
+    return {
+      label: "Text fallback",
+      className: "text-card",
+      Icon: FileText,
+    };
+  }
+
+  if (item.confidence === null) {
+    return {
+      label: "Matched image",
+      className: "matched-image",
+      Icon: ImageIcon,
+    };
+  }
+
+  if (item.confidence >= 0.9) {
+    return {
+      label: "Strong match",
+      className: "strong-match",
+      Icon: BadgeCheck,
+    };
+  }
+
+  if (item.confidence >= 0.75) {
+    return {
+      label: "Good match",
+      className: "good-match",
+      Icon: CheckCircle2,
+    };
+  }
+
+  return {
+    label: "Needs review",
+    className: "review-match",
+    Icon: AlertTriangle,
+  };
+}
 
 export function MatchesPanel({
   isApplying,
@@ -54,7 +131,13 @@ export function MatchesPanel({
             ? overrides[item.name].replace("image_url:", "")
             : "";
           const isManualImage = Boolean(manualUrl);
+          const status = getMatchStatus({
+            item,
+            isForcedText,
+            isManualImage,
+          });
 
+          const StatusIcon = status.Icon;
           return (
             <article
               className={`match-row ${isForcedText ? "forced-text" : ""} ${isManualImage ? "manual-image" : ""}`}
@@ -78,13 +161,11 @@ export function MatchesPanel({
                 </span>
               </div>
               <span
-                className={`match-pill ${isForcedText ? "text-card" : item.asset_kind}`}
+                className={`match-pill icon-pill ${status.className}`}
+                aria-label={status.label}
+                title={status.label}
               >
-                {isForcedText
-                  ? "Text card"
-                  : isManualImage
-                    ? "Manual"
-                    : formatMatchQuality(item)}
+                <StatusIcon size={16} strokeWidth={2.25} aria-hidden="true" />
               </span>
               <div className="match-actions">
                 <button
@@ -93,7 +174,7 @@ export function MatchesPanel({
                   onClick={() => onOverride(item.name, "keep")}
                   title="Use the image match Tierzo found."
                 >
-                  Use image
+                  Image
                 </button>
                 <button
                   type="button"
@@ -101,7 +182,7 @@ export function MatchesPanel({
                   onClick={() => onOverride(item.name, "text")}
                   title="Ignore this image and render a normal text card."
                 >
-                  Use text
+                  Text
                 </button>
                 <label className="replace-match">
                   Replace

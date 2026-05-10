@@ -112,6 +112,56 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(manifest_body["enrichment"]["mode"], "tmdb_movie")
         self.assertEqual(manifest_body["items"][0]["asset_kind"], "text-card")
 
+    def test_tmdb_error_falls_back_to_text_cards(self) -> None:
+        previous_key = os.environ.get("TMDB_API_KEY")
+        os.environ["TMDB_API_KEY"] = "test"
+        client = TestClient(app)
+
+        def fake_enrich_many(_self: object, values: list[str], image_dir: Path) -> dict[str, EnrichedAsset]:
+            raise RuntimeError("TMDb service unavailable")
+
+        try:
+            with patch("tierzo_api.main.TmdbMovieEnricher.enrich_many", fake_enrich_many):
+                response = client.post(
+                    "/packs",
+                    json={
+                        "text": "Alien\nThe Thing",
+                        "preset": "arcade",
+                        "size": 256,
+                        "filename_mode": "both",
+                        "title": "Movies",
+                        "enrichment_mode": "tmdb_movie",
+                    },
+                )
+        finally:
+            if previous_key is None:
+                os.environ.pop("TMDB_API_KEY", None)
+            else:
+                os.environ["TMDB_API_KEY"] = previous_key
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertIn("error_fallback_text", body["enrichment_status"])
+        manifest_body = client.get(body["manifest_url"]).json()
+        self.assertEqual(manifest_body["items"][0]["asset_kind"], "text-card")
+
+    def test_rejects_too_many_input_items(self) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/packs",
+            json={
+                "text": "\n".join(f"Item {i}" for i in range(201)),
+                "preset": "arcade",
+                "size": 256,
+                "filename_mode": "both",
+                "title": "Too Large",
+            },
+        )
+
+        self.assertEqual(response.status_code, 413)
+        body = response.json()
+        self.assertIn("maximum is", body["detail"])
+
     def test_auto_agent_uses_typed_plan(self) -> None:
         previous_openai_key = os.environ.pop("OPENAI_API_KEY", None)
         previous_tmdb_key = os.environ.pop("TMDB_API_KEY", None)

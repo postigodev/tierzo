@@ -1,18 +1,18 @@
 import type { NextConfig } from "next";
 
+const apiBase =
+  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_TIERZO_API_URL ??
+  "http://localhost:8000";
+const apiUrl = new URL(apiBase);
+
 const nextConfig: NextConfig = {
   images: {
     remotePatterns: [
       {
-        protocol: "http",
-        hostname: "localhost",
-        port: "8000",
-        pathname: "/packs/**",
-      },
-      {
-        protocol: "http",
-        hostname: "127.0.0.1",
-        port: "8000",
+        protocol: apiUrl.protocol.replace(":", ""),
+        hostname: apiUrl.hostname,
+        port: apiUrl.port || undefined,
         pathname: "/packs/**",
       },
     ],

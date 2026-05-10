@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import time
 import uuid
 import os
 from dataclasses import dataclass, field
@@ -23,6 +24,13 @@ from tierzo.presets import PRESETS, TextCardPreset, get_preset
 ROOT_DIR = Path(__file__).resolve().parents[3]
 STORAGE_DIR = ROOT_DIR / ".tierzo" / "storage"
 AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
+MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
+MAX_LIST_ITEMS = int(os.getenv("MAX_LIST_ITEMS", "200"))
+PACK_TTL_SECONDS = int(os.getenv("PACK_TTL_SECONDS", "3600"))
+DEFAULT_FRONTEND_ORIGINS = [
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+]
 
 
 def load_root_env() -> None:
@@ -110,13 +118,17 @@ class CardStyleRequest(BaseModel):
 
 
 class GeneratePackRequest(BaseModel):
-    text: str = Field(min_length=1)
+    text: str = Field(min_length=1, max_length=10000)
     preset: str = "arcade"
     size: int = Field(default=512, ge=256, le=1536)
     filename_mode: str = "both"
     title: str = "Tierzo Demo Pack"
     description: str | None = None
-    row_labels: list[str] = Field(default_factory=lambda: ["S", "A", "B", "C", "D"])
+    row_labels: list[str] = Field(
+        default_factory=lambda: ["S", "A", "B", "C", "D"],
+        min_items=1,
+        max_items=12,
+    )
     custom_preset: CardStyleRequest | None = None
     enrichment_mode: str = "text"
     agent_cache_refresh: bool = False
@@ -204,18 +216,57 @@ class TierMakerExtensionPayload(BaseModel):
     batches: list[TierMakerBatchPayload]
 
 
+def normalize_origin(origin: str) -> str:
+    return origin.strip().rstrip("/")
+
+
+def allowed_cors_origins() -> list[str]:
+    raw = os.getenv("FRONTEND_URL") or os.getenv("ALLOW_ORIGINS")
+    origins: list[str] = []
+    if raw:
+        origins.extend(
+            normalize_origin(origin)
+            for origin in raw.split(",")
+            if origin.strip()
+        )
+    origins.extend(DEFAULT_FRONTEND_ORIGINS)
+    return list(dict.fromkeys(origins))
+
+
+def cleanup_expired_storage() -> None:
+    if not STORAGE_DIR.exists():
+        return
+    cutoff = time.time() - PACK_TTL_SECONDS
+    for child in STORAGE_DIR.iterdir():
+        try:
+            if child.is_dir():
+                modified = child.stat().st_mtime
+                if modified < cutoff:
+                    shutil.rmtree(child)
+            elif child.is_file() and child.suffix == ".zip":
+                modified = child.stat().st_mtime
+                if modified < cutoff:
+                    child.unlink()
+        except Exception:
+            continue
+
+
 app = FastAPI(title="Tierzo API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-    ],
+    allow_origins=allowed_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    cleanup_expired_storage()
+
 
 JOBS: dict[str, JobRecord] = {}
 
@@ -301,7 +352,13 @@ def build_pack(
 ) -> GeneratePackResponse:
     agent_plan: IntakePlan | None = None
     enrichment_mode = payload.enrichment_mode
+    cleanup_expired_storage()
     values = parse_text_lines(payload.text)
+    if len(values) > MAX_LIST_ITEMS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"List too large; maximum is {MAX_LIST_ITEMS} items.",
+        )
     if payload.enrichment_mode == "auto":
         agent_plan = plan_intake(
             payload.text,
@@ -630,6 +687,7 @@ def get_generation_job(job_id: str) -> JobResponse:
 
 @app.get("/packs/{pack_id}/files/{filename}")
 def get_pack_file(pack_id: str, filename: str) -> FileResponse:
+    cleanup_expired_storage()
     path = STORAGE_DIR / pack_id / filename
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="File not found.")
@@ -638,6 +696,7 @@ def get_pack_file(pack_id: str, filename: str) -> FileResponse:
 
 @app.get("/packs/{pack_id}/zip")
 def get_pack_zip(pack_id: str) -> FileResponse:
+    cleanup_expired_storage()
     path = STORAGE_DIR / f"{pack_id}.zip"
     if not path.exists() or not path.is_file():
         raise HTTPException(status_code=404, detail="ZIP not found.")
@@ -646,6 +705,7 @@ def get_pack_zip(pack_id: str) -> FileResponse:
 
 @app.get("/packs/{pack_id}/tiermaker-extension.json", response_model=TierMakerExtensionPayload)
 def get_tiermaker_extension_payload(pack_id: str, request: Request) -> TierMakerExtensionPayload:
+    cleanup_expired_storage()
     pack_dir = STORAGE_DIR / pack_id
     manifest_path = pack_dir / "manifest.json"
     zip_path = STORAGE_DIR / f"{pack_id}.zip"

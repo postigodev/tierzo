@@ -200,7 +200,11 @@ You can also put it in a local root `.env` file:
 ```text
 OPENAI_API_KEY=your_openai_api_key
 TMDB_API_KEY=your_tmdb_api_key
+FRONTEND_URL=http://localhost:3000
+NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
+
+For production, set the deployed frontend origin in `FRONTEND_URL` so FastAPI only allows that domain.
 
 Run both services:
 

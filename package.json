@@ -13,8 +13,5 @@
     "test": "node scripts/python.mjs -m unittest discover -s tests",
     "verify": "corepack pnpm test && corepack pnpm lint && corepack pnpm build",
     "demo:verify": "corepack pnpm --filter @tierzo/web verify:demo"
-  },
-  "dependencies": {
-    "lucide-react": "^1.12.0"
   }
 }

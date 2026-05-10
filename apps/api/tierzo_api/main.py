@@ -31,7 +31,11 @@ DEFAULT_FRONTEND_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
 ]
-
+ALLOW_MANUAL_IMAGE_URLS = os.getenv("ALLOW_MANUAL_IMAGE_URLS", "false").lower() in {
+    "1",
+    "true",
+    "yes",
+}
 
 def load_root_env() -> None:
     env_path = ROOT_DIR / ".env"
@@ -118,7 +122,7 @@ class CardStyleRequest(BaseModel):
 
 
 class GeneratePackRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=10000)
+    text: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
     preset: str = "arcade"
     size: int = Field(default=512, ge=256, le=1536)
     filename_mode: str = "both"
@@ -417,11 +421,15 @@ def build_pack(
         for name, action in payload.asset_overrides.items()
         if action == "text"
     }
-    manual_image_urls = {
-        name: action.removeprefix("image_url:")
-        for name, action in payload.asset_overrides.items()
-        if action.startswith("image_url:")
-    }
+    manual_image_urls = (
+        {
+            name: action.removeprefix("image_url:")
+            for name, action in payload.asset_overrides.items()
+            if action.startswith("image_url:")
+        }
+        if ALLOW_MANUAL_IMAGE_URLS
+        else {}
+    )
     if enrichment_mode == "tmdb_movie":
         api_key = os.getenv("TMDB_API_KEY")
         if api_key:

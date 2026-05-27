@@ -21,6 +21,7 @@ type FontOption = {
 };
 
 export function SourceTray({
+  canReviewMatches,
   cardLabStyle,
   cardStyle,
   enrichmentMode,
@@ -44,6 +45,7 @@ export function SourceTray({
   text,
   matchOverrides,
 }: {
+  canReviewMatches: boolean;
   cardLabStyle: CSSProperties;
   cardStyle: CardStyle;
   enrichmentMode: string;
@@ -75,7 +77,7 @@ export function SourceTray({
     <div className="source-tray">
       <div>
         <div className="source-copy">
-          <span>Source list</span>
+          <span>Items</span>
           <strong>{itemCount} items</strong>
         </div>
         <textarea
@@ -110,7 +112,7 @@ export function SourceTray({
             <option value="text">Text cards only</option>
             <option value="tmdb_movie">Movie posters</option>
           </select>
-          <small>Let Tierzo pick text cards or source posters.</small>
+          <small>Pick automatic sourcing or force a specific asset mode.</small>
         </label>
         <CardLabPanel
           cardLabStyle={cardLabStyle}
@@ -125,7 +127,7 @@ export function SourceTray({
         >
           {isGenerating ? "Generating..." : "Generate pack"}
         </button>
-        {pack ? (
+        {pack && canReviewMatches ? (
           <button
             className="secondary-action"
             type="button"
@@ -158,7 +160,7 @@ export function SourceTray({
             {pack.agent_plan.cache_hit ? " from cache" : ""}
           </p>
         ) : null}
-        {pack && showMatches ? (
+        {pack && canReviewMatches && showMatches ? (
           <MatchesPanel
             isApplying={isGenerating}
             onApply={onApplyMatchOverrides}

@@ -7,12 +7,14 @@ type UsePackGenerationOptions = {
   buildPayload: (overrides?: MatchOverrides) => unknown;
   initialPack?: PackResponse | null;
   onPackGenerated?: (pack: PackResponse) => void;
+  shouldShowMatchesOnGenerate?: () => boolean;
 };
 
 export function usePackGeneration({
   buildPayload,
   initialPack = null,
   onPackGenerated,
+  shouldShowMatchesOnGenerate,
 }: UsePackGenerationOptions) {
   const [pack, setPack] = useState<PackResponse | null>(initialPack);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +80,7 @@ export function usePackGeneration({
 
       const nextPack = await pollGenerationJob(createdJob.job_id);
       setPack(nextPack);
-      setShowMatches(true);
+      setShowMatches(shouldShowMatchesOnGenerate?.() ?? true);
       setMatchOverrides({});
       onPackGenerated?.(nextPack);
       return nextPack;

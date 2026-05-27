@@ -22,7 +22,9 @@ from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
-STORAGE_DIR = ROOT_DIR / ".tierzo" / "storage"
+STORAGE_DIR = Path(
+    os.getenv("TIERZO_STORAGE_DIR", ROOT_DIR / ".tierzo" / "storage")
+).resolve()
 AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 MAX_LIST_ITEMS = int(os.getenv("MAX_LIST_ITEMS", "200"))

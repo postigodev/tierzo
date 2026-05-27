@@ -82,12 +82,8 @@ function loadSavedDemoState() {
 export default function Home() {
   const savedState = useMemo(() => loadSavedDemoState(), []);
   const [text, setText] = useState(() => savedState?.text ?? SAMPLE_LIST);
-  const [title, setTitle] = useState(
-    () => savedState?.title ?? "PS2 Survival Horror Demo",
-  );
-  const [description, setDescription] = useState(
-    () => savedState?.description ?? "",
-  );
+  const [title, setTitle] = useState(() => savedState?.title ?? "");
+  const [description, setDescription] = useState(() => savedState?.description ?? "");
   const [preset, setPreset] = useState(() => savedState?.preset ?? "arcade");
   const [enrichmentMode, setEnrichmentMode] = useState(
     () => savedState?.enrichmentMode ?? "auto",
@@ -97,6 +93,7 @@ export default function Home() {
   );
   const [isExporting, setIsExporting] = useState(false);
   const deferredText = useDeferredValue(text);
+  const canReviewMatches = enrichmentMode !== "text";
   const {
     error,
     generatePack,
@@ -111,6 +108,7 @@ export default function Home() {
   } = usePackGeneration({
     buildPayload: buildGeneratePayload,
     initialPack: savedState?.pack ?? null,
+    shouldShowMatchesOnGenerate: () => canReviewMatches,
   });
   const {
     benchItems,
@@ -170,6 +168,12 @@ export default function Home() {
     title,
   ]);
 
+  useEffect(() => {
+    if (!canReviewMatches) {
+      setShowMatches(false);
+    }
+  }, [canReviewMatches, setShowMatches]);
+
   const itemCount = useMemo(
     () =>
       deferredText
@@ -185,7 +189,7 @@ export default function Home() {
       preset,
       size: 512,
       filename_mode: "both",
-      title: title.trim() || "Untitled Tierzo Pack",
+      title: title.trim() || "Tierzo Pack",
       description: description.trim() || null,
       row_labels: tiers.map((tier) => tier.label.trim() || "-"),
       enrichment_mode: enrichmentMode,
@@ -215,11 +219,7 @@ export default function Home() {
       return;
     }
 
-    setBoard({
-      [tiers[0]?.id ?? "tier-s"]: nextPack.items.slice(0, 2),
-      [tiers[1]?.id ?? "tier-a"]: nextPack.items.slice(2, 4),
-      [tiers[2]?.id ?? "tier-b"]: nextPack.items.slice(4, 6),
-    });
+    setBoard({});
   }
 
   function applyMatchOverrides() {
@@ -287,7 +287,7 @@ export default function Home() {
 
   return (
     <main className="tm-page" onClick={closeRowMenu}>
-      <nav className="topbar" aria-label="Tierzo demo navigation">
+      <nav className="topbar" aria-label="Tierzo workspace navigation">
         <div className="pixel-mark" aria-hidden="true">
           <span />
           <span />
@@ -299,35 +299,37 @@ export default function Home() {
         </div>
         <a
           className="community-link"
-          href="https://tiermaker.com/"
+          href="https://tiermaker.com/categories/create/"
           rel="noreferrer"
           target="_blank"
         >
-          Explore Community Tier Lists
+          Open TierMaker
         </a>
       </nav>
 
       <header className="title-block">
+        <p className="title-label">Title</p>
         <input
           aria-label="Tier list title"
           className="title-input"
           value={title}
           onChange={(event) => setTitle(event.target.value)}
-          placeholder="Name your tier list..."
+          placeholder="Enter a tier list title"
         />
+        <p className="title-label">Description</p>
         <input
           aria-label="Tier list description"
           className="description-input"
           value={description}
           onChange={(event) => setDescription(event.target.value)}
-          placeholder="Add a description or bio..."
+          placeholder="Add an optional description"
         />
       </header>
 
-      <section className="maker-panel" aria-label="Tierzo tier list demo">
+      <section className="maker-panel" aria-label="Tierzo editor">
         <div className="preview-head">
           <div className="source-list-panel">
-            <h2>{title} preview</h2>
+            <h2>{title.trim() || "Untitled list"}</h2>
           </div>
           <div className="preview-actions">
             <button
@@ -372,6 +374,7 @@ export default function Home() {
         />
 
         <SourceTray
+          canReviewMatches={canReviewMatches}
           cardLabStyle={cardLabStyle}
           cardStyle={cardStyle}
           enrichmentMode={enrichmentMode}

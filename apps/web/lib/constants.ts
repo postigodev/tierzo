@@ -1,13 +1,6 @@
 import type { CardStyle } from "./types";
 
-export const SAMPLE_LIST = `Silent Hill 2
-Resident Evil 4
-Fatal Frame II
-Rule of Rose
-Kuon
-Siren
-Haunting Ground
-Clock Tower 3`;
+export const SAMPLE_LIST = "";
 
 export const BASE_CARD_STYLE = {
   bold: true,
@@ -169,7 +162,7 @@ export const DEFAULT_TIERS = [
   { id: "tier-d", label: "D" },
 ];
 
-export const BOARD_STORAGE_KEY = "tierzo.demo.v1";
+export const BOARD_STORAGE_KEY = "tierzo.editor.v2";
 
 export const TIER_COLORS = [
   "#ff747a",

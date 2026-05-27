@@ -204,7 +204,7 @@ export function TierBoard({
               />
             ))
           ) : (
-            <span>Generated cards will land here.</span>
+            <span>Unranked items will appear here.</span>
           )}
         </div>
       </div>

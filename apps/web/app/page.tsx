@@ -25,6 +25,7 @@ import { hexToRgba, textDecoration } from "../lib/style-utils";
 import type {
   CardStyle,
   MatchOverrides,
+  PromptDraftResponse,
   SavedDemoState,
 } from "../lib/types";
 
@@ -88,6 +89,10 @@ export default function Home() {
   const [enrichmentMode, setEnrichmentMode] = useState(
     () => savedState?.enrichmentMode ?? "auto",
   );
+  const [promptText, setPromptText] = useState("");
+  const [promptDraft, setPromptDraft] = useState<PromptDraftResponse | null>(null);
+  const [promptError, setPromptError] = useState<string | null>(null);
+  const [isDraftingPrompt, setIsDraftingPrompt] = useState(false);
   const [cardStyle, setCardStyle] = useState<CardStyle>(() =>
     resolveSavedCardStyle(savedState?.cardStyle),
   );
@@ -102,6 +107,7 @@ export default function Home() {
     matchOverrides,
     pack,
     setError,
+    setPack,
     setShowMatches,
     showMatches,
     updateMatchOverride,
@@ -224,6 +230,57 @@ export default function Home() {
 
   function applyMatchOverrides() {
     void handleGeneratePack(matchOverrides);
+  }
+
+  async function handleDraftFromPrompt() {
+    const nextPrompt = promptText.trim();
+    if (!nextPrompt) {
+      return;
+    }
+
+    setPromptError(null);
+    setError(null);
+    setIsDraftingPrompt(true);
+
+    try {
+      const response = await fetch(apiUrl("/prompt-drafts"), {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt: nextPrompt }),
+      });
+
+      const body = (await response.json()) as
+        | PromptDraftResponse
+        | { detail?: string };
+
+      if (!response.ok) {
+        throw new Error(
+          typeof body === "object" && body && "detail" in body && body.detail
+            ? body.detail
+            : "Tierzo could not draft a tier list from that prompt.",
+        );
+      }
+
+      const draft = body as PromptDraftResponse;
+      setPromptDraft(draft);
+      setTitle(draft.title);
+      setDescription(draft.description ?? "");
+      setText(draft.items.join("\n"));
+      setEnrichmentMode(draft.suggested_enrichment_mode);
+      setBoard({});
+      setPack(null);
+      setShowMatches(false);
+    } catch (caught) {
+      setPromptError(
+        caught instanceof Error
+          ? caught.message
+          : "Tierzo could not draft a tier list from that prompt.",
+      );
+    } finally {
+      setIsDraftingPrompt(false);
+    }
   }
 
   function selectPreset(nextPreset: string) {
@@ -382,12 +439,20 @@ export default function Home() {
           fontOptions={FONT_OPTIONS}
           generationJob={generationJob}
           isGenerating={isGenerating}
+          isDraftingPrompt={isDraftingPrompt}
           itemCount={itemCount}
           matchOverrides={matchOverrides}
           onApplyMatchOverrides={applyMatchOverrides}
+          onDraftFromPrompt={() => void handleDraftFromPrompt()}
           onGeneratePack={() => void handleGeneratePack()}
           onSelectPreset={selectPreset}
           onSetEnrichmentMode={setEnrichmentMode}
+          onSetPromptText={(nextPrompt) => {
+            if (promptError) {
+              setPromptError(null);
+            }
+            setPromptText(nextPrompt);
+          }}
           onSetShowMatches={setShowMatches}
           onSetText={setText}
           onUpdateCardStyle={updateCardStyle}
@@ -395,6 +460,9 @@ export default function Home() {
           pack={pack}
           preset={preset}
           presets={PRESETS}
+          promptDraft={promptDraft}
+          promptError={promptError}
+          promptText={promptText}
           showMatches={showMatches}
           text={text}
         />

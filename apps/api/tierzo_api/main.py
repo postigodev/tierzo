@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from tierzo.agentic import IntakePlan, plan_intake
+from tierzo.agentic import IntakePlan, draft_prompt_to_tierlist, plan_intake
 from tierzo.export import generate_pack, zip_pack
 from tierzo.enrichers import EnrichedAsset, TmdbMovieEnricher
 from tierzo.parsers import parse_text_lines
@@ -26,6 +26,7 @@ STORAGE_DIR = Path(
     os.getenv("TIERZO_STORAGE_DIR", ROOT_DIR / ".tierzo" / "storage")
 ).resolve()
 AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
+PROMPT_DRAFT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "prompt-drafts"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 MAX_LIST_ITEMS = int(os.getenv("MAX_LIST_ITEMS", "200"))
 PACK_TTL_SECONDS = int(os.getenv("PACK_TTL_SECONDS", "3600"))
@@ -139,6 +140,21 @@ class GeneratePackRequest(BaseModel):
     enrichment_mode: str = "text"
     agent_cache_refresh: bool = False
     asset_overrides: dict[str, str] = Field(default_factory=dict)
+
+
+class PromptDraftRequest(BaseModel):
+    prompt: str = Field(min_length=3, max_length=500)
+    force_refresh: bool = False
+
+
+class PromptDraftResponse(BaseModel):
+    title: str
+    description: str | None
+    items: list[str]
+    suggested_enrichment_mode: str
+    confidence: float
+    source: str
+    cache_hit: bool = False
 
 
 class PackItemResponse(BaseModel):
@@ -289,6 +305,30 @@ def health() -> dict[str, object]:
 @app.get("/presets")
 def presets() -> dict[str, list[str]]:
     return {"presets": sorted(PRESETS)}
+
+
+@app.post("/prompt-drafts", response_model=PromptDraftResponse)
+def create_prompt_draft(payload: PromptDraftRequest) -> PromptDraftResponse:
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+    if not openai_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Prompt drafting needs OPENAI_API_KEY.",
+        )
+
+    draft = draft_prompt_to_tierlist(
+        payload.prompt,
+        cache_dir=PROMPT_DRAFT_CACHE_DIR,
+        openai_api_key=openai_api_key,
+        force_refresh=payload.force_refresh,
+    )
+    if not draft.items:
+        raise HTTPException(
+            status_code=422,
+            detail="Tierzo could not draft a usable list from that prompt.",
+        )
+
+    return PromptDraftResponse(**draft.to_dict())
 
 
 def resolve_font_path(font_family: str, *, bold: bool, italic: bool) -> Path | None:

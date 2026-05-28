@@ -12,6 +12,7 @@ import type {
   GenerationJob,
   MatchOverrides,
   PackResponse,
+  PromptDraftResponse,
 } from "../lib/types";
 
 type FontOption = {
@@ -29,10 +30,13 @@ export function SourceTray({
   fontOptions,
   generationJob,
   isGenerating,
+  isDraftingPrompt,
   itemCount,
   onApplyMatchOverrides,
+  onDraftFromPrompt,
   onGeneratePack,
   onSetEnrichmentMode,
+  onSetPromptText,
   onSetShowMatches,
   onSetText,
   onSelectPreset,
@@ -41,6 +45,9 @@ export function SourceTray({
   pack,
   preset,
   presets,
+  promptDraft,
+  promptError,
+  promptText,
   showMatches,
   text,
   matchOverrides,
@@ -53,12 +60,15 @@ export function SourceTray({
   fontOptions: FontOption[];
   generationJob: GenerationJob | null;
   isGenerating: boolean;
+  isDraftingPrompt: boolean;
   itemCount: number;
   matchOverrides: MatchOverrides;
   onApplyMatchOverrides: () => void;
+  onDraftFromPrompt: () => void;
   onGeneratePack: () => void;
   onSelectPreset: (preset: string) => void;
   onSetEnrichmentMode: (mode: string) => void;
+  onSetPromptText: (text: string) => void;
   onSetShowMatches: (updater: (current: boolean) => boolean) => void;
   onSetText: (text: string) => void;
   onUpdateCardStyle: (nextStyle: Partial<CardStyle>) => void;
@@ -70,12 +80,49 @@ export function SourceTray({
   pack: PackResponse | null;
   preset: string;
   presets: string[];
+  promptDraft: PromptDraftResponse | null;
+  promptError: string | null;
+  promptText: string;
   showMatches: boolean;
   text: string;
 }) {
   return (
     <div className="source-tray">
       <div>
+        <div className="prompt-draft-box">
+          <div className="source-copy prompt-draft-copy">
+            <span>Prompt to tier list</span>
+            <strong>Describe what you want and Tierzo drafts the list</strong>
+          </div>
+          <div className="prompt-draft-row">
+            <input
+              aria-label="Prompt to tier list"
+              className="prompt-draft-input"
+              value={promptText}
+              onChange={(event) => onSetPromptText(event.target.value)}
+              placeholder="e.g. best PS2 survival horror games for one spooky night"
+            />
+            <button
+              type="button"
+              className="secondary-action"
+              onClick={onDraftFromPrompt}
+              disabled={isDraftingPrompt || !promptText.trim()}
+            >
+              {isDraftingPrompt ? "Drafting..." : "Draft list"}
+            </button>
+          </div>
+          {promptDraft ? (
+            <p className="prompt-draft-status">
+              Drafted {promptDraft.items.length} items via {formatToolName(promptDraft.suggested_enrichment_mode)}
+              {promptDraft.cache_hit ? " from cache" : ""}.
+            </p>
+          ) : (
+            <p className="prompt-draft-status">
+              Tierzo suggests a title, item list, and best generate mode before rendering.
+            </p>
+          )}
+          {promptError ? <p className="error">{promptError}</p> : null}
+        </div>
         <div className="source-copy">
           <span>Items</span>
           <strong>{itemCount} items</strong>

@@ -47,6 +47,16 @@ export type GenerationJob = {
 
 export type MatchOverrides = Record<string, "text" | `image_url:${string}`>;
 
+export type PromptDraftResponse = {
+  title: string;
+  description: string | null;
+  items: string[];
+  suggested_enrichment_mode: "auto" | "text" | "tmdb_movie";
+  confidence: number;
+  source: string;
+  cache_hit: boolean;
+};
+
 export type CardStyle = {
   background: string;
   textColor: string;

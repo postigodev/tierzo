@@ -7,6 +7,7 @@ import { EmptyBoardCue } from "../components/empty-board-cue";
 import { SourceTray } from "../components/source-tray";
 import { TierBoard } from "../components/tier-board";
 import { WorkspaceProgress } from "../components/workspace-progress";
+import { useCapabilities } from "../hooks/use-capabilities";
 import { usePackGeneration } from "../hooks/use-pack-generation";
 import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
@@ -123,7 +124,17 @@ export default function Home() {
   );
   const [isExporting, setIsExporting] = useState(false);
   const deferredText = useDeferredValue(text);
-  const canReviewMatches = enrichmentMode !== "text";
+  const {
+    capabilities,
+    state: capabilityState,
+  } = useCapabilities();
+  const tmdbAvailable =
+    capabilityState === "ready" &&
+    capabilities.capabilities.tmdb_movie.available;
+  const resolvedEnrichmentMode =
+    enrichmentMode === "tmdb_movie" && !tmdbAvailable
+      ? "text"
+      : enrichmentMode;
   const {
     artifactState,
     cancelPolling,
@@ -146,9 +157,13 @@ export default function Home() {
     buildPayload: buildGeneratePayload,
     initialPack: savedState.pack,
     initialLastJobId: savedState.lastJobId,
-    shouldShowMatchesOnGenerate: () => canReviewMatches,
+    shouldShowMatchesOnGenerate: (generatedPack) =>
+      generatedPack.items.some((item) => item.asset_kind !== "text-card"),
   });
   const availablePack = artifactState === "completed" ? pack : null;
+  const canReviewMatches =
+    availablePack?.items.some((item) => item.asset_kind !== "text-card") ??
+    false;
   const {
     benchItems,
     board,
@@ -256,7 +271,7 @@ export default function Home() {
       title: title.trim() || "Tierzo Pack",
       description: description.trim() || null,
       row_labels: tiers.map((tier) => tier.label.trim() || "-"),
-      enrichment_mode: enrichmentMode,
+      enrichment_mode: resolvedEnrichmentMode,
       item_asset_overrides: overrides,
       custom_preset: {
         background: cardStyle.background,
@@ -350,17 +365,30 @@ export default function Home() {
 
       const body = (await response.json()) as
         | PromptDraftResponse
-        | { detail?: string };
+        | { detail?: string | { message?: string } };
 
       if (!response.ok) {
-        throw new Error(
-          typeof body === "object" && body && "detail" in body && body.detail
+        const detail =
+          typeof body === "object" && body && "detail" in body
             ? body.detail
-            : "Tierzo could not draft a tier list from that prompt.",
+            : null;
+        throw new Error(
+          typeof detail === "string"
+            ? detail
+            : detail &&
+                typeof detail === "object" &&
+                typeof detail.message === "string"
+              ? detail.message
+              : "Tierzo could not draft a tier list from that prompt.",
         );
       }
 
-      const draft = body as PromptDraftResponse;
+      const rawDraft = body as PromptDraftResponse;
+      const draft: PromptDraftResponse = {
+        ...rawDraft,
+        outcome: rawDraft.outcome ?? "normal",
+        warnings: Array.isArray(rawDraft.warnings) ? rawDraft.warnings : [],
+      };
       setPromptDraft(draft);
       setTitle(draft.title);
       setDescription(draft.description ?? "");
@@ -491,9 +519,10 @@ export default function Home() {
         <SourceTray
           artifactState={artifactState}
           canReviewMatches={canReviewMatches}
+          capabilityState={capabilityState}
           cardLabStyle={cardLabStyle}
           cardStyle={cardStyle}
-          enrichmentMode={enrichmentMode}
+          enrichmentMode={resolvedEnrichmentMode}
           error={error}
           fontOptions={FONT_OPTIONS}
           generationJob={generationJob}
@@ -530,6 +559,7 @@ export default function Home() {
           showMatches={showMatches}
           text={text}
           title={title}
+          tmdbAvailable={tmdbAvailable}
           workspacePhase={workspacePhase}
         />
 

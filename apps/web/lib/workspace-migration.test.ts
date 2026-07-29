@@ -33,6 +33,8 @@ function makePack(items: PackItem[]): PackResponse {
     zip_url: "/zip",
     extension_url: "/extension",
     enrichment_status: "text",
+    outcome: "normal",
+    warnings: [],
     agent_plan: null,
   };
 }
@@ -166,6 +168,34 @@ test("sanitizes v3 state without remigrating it", () => {
   assert.equal(result.migrated, false);
   assert.deepEqual(result.state.board, { s: ["a"], a: ["b"] });
   assert.match(result.warnings.join(" "), /no longer have source items/);
+});
+
+test("normalizes legacy pack outcomes without changing workspace version", () => {
+  const item = makePackItem("001", "Alpha");
+  const legacyPack = makePack([item]) as unknown as Record<string, unknown>;
+  delete legacyPack.outcome;
+  delete legacyPack.warnings;
+
+  const result = migrateWorkspaceState({
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    text: "Alpha",
+    title: "Legacy outcome",
+    description: "",
+    preset: "arcade",
+    cardStyle: null,
+    enrichmentMode: "text",
+    tiers: [{ id: "s", label: "S" }],
+    board: { s: ["001"] },
+    pack: legacyPack,
+    lastJobId: null,
+    migrationWarnings: [],
+  });
+
+  assert.equal(result.state.version, 3);
+  assert.equal(result.state.pack?.outcome, "normal");
+  assert.deepEqual(result.state.pack?.warnings, []);
+  assert.deepEqual(result.state.board, { s: ["001"] });
 });
 
 test("preserves pre-lifecycle v3 pack snapshots for validation", () => {

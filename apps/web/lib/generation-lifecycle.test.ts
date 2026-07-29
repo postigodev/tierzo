@@ -99,6 +99,8 @@ function makePack(overrides: Partial<PackResponse> = {}): PackResponse {
     zip_url: "/packs/pack-1/zip",
     extension_url: "/packs/pack-1/tiermaker-extension.json",
     enrichment_status: "text",
+    outcome: "normal",
+    warnings: [],
     agent_plan: null,
     ...overrides,
   };
@@ -794,6 +796,40 @@ test("validates a canonical generation job before polling can mutate state", () 
   });
 
   assert.deepEqual(parseGenerationJob(job, "job-1"), job);
+});
+
+test("normalizes legacy pack outcomes in completed jobs", () => {
+  const legacyPack = makePack() as unknown as Record<string, unknown>;
+  delete legacyPack.outcome;
+  delete legacyPack.warnings;
+
+  const parsed = parseGenerationJob(
+    makeJob("completed", {
+      pack: legacyPack as unknown as PackResponse,
+      pack_status: "completed",
+    }),
+    "job-1",
+  );
+
+  assert.equal(parsed.pack?.outcome, "normal");
+  assert.deepEqual(parsed.pack?.warnings, []);
+});
+
+test("rejects inconsistent structured pack outcomes", () => {
+  assert.throws(
+    () =>
+      parseGenerationJob(
+        makeJob("completed", {
+          pack: makePack({
+            outcome: "degraded",
+            warnings: [],
+          }),
+          pack_status: "completed",
+        }),
+        "job-1",
+      ),
+    ClientContractError,
+  );
 });
 
 test("rejects malformed generation jobs as client contract errors", async (t) => {

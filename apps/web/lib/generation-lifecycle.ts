@@ -2,6 +2,7 @@ import {
   isNullableAbsoluteHttpUrl,
   sanitizeSourceUrl,
 } from "#tierzo/artifact-contract";
+import { normalizeGenerationOutcome } from "#tierzo/generation-outcome";
 import type {
   ArtifactState,
   GenerationJob,
@@ -88,13 +89,18 @@ export function parseGenerationJob(
   }
 
   if (job.status === "completed") {
+    const normalizedPack = normalizeCanonicalPack(job.pack);
     if (
       !isPackLifecycleStatus(job.pack_status) ||
-      !isCanonicalPack(job.pack) ||
+      normalizedPack === null ||
       job.error !== null
     ) {
       throw new ClientContractError();
     }
+    return {
+      ...job,
+      pack: normalizedPack,
+    } as GenerationJob;
   } else if (
     job.pack !== null ||
     job.pack_status !== null ||
@@ -485,9 +491,9 @@ function isJobStep(value: unknown): boolean {
   );
 }
 
-function isCanonicalPack(value: unknown): value is PackResponse {
+function normalizeCanonicalPack(value: unknown): PackResponse | null {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
-    return false;
+    return null;
   }
   const pack = value as Record<string, unknown>;
   const createdAt = parseTrustedUtcTimestamp(
@@ -518,7 +524,16 @@ function isCanonicalPack(value: unknown): value is PackResponse {
     !isNonEmptyString(pack.enrichment_status) ||
     !isAgentPlan(pack.agent_plan)
   ) {
-    return false;
+    return null;
+  }
+
+  const generationOutcome = normalizeGenerationOutcome(
+    pack.enrichment_status,
+    pack.outcome,
+    pack.warnings,
+  );
+  if (generationOutcome === null) {
+    return null;
   }
 
   const itemIds = new Set<string>();
@@ -531,12 +546,15 @@ function isCanonicalPack(value: unknown): value is PackResponse {
       item.image_url !==
         `/packs/${pack.pack_id}/files/${item.filename as string}`
     ) {
-      return false;
+      return null;
     }
     itemIds.add(item.id as string);
     filenames.add(item.filename as string);
   }
-  return true;
+  return {
+    ...(pack as unknown as PackResponse),
+    ...generationOutcome,
+  };
 }
 
 function isPackItem(value: unknown): boolean {

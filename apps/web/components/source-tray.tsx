@@ -24,6 +24,7 @@ import type {
   PromptDraftResponse,
 } from "../lib/types";
 import type { WorkspacePhase } from "../lib/workspace-view";
+import type { CapabilityState } from "../hooks/use-capabilities";
 
 type FontOption = {
   css: string;
@@ -35,6 +36,7 @@ type IntakeMode = "describe" | "paste";
 
 export function SourceTray({
   canReviewMatches,
+  capabilityState,
   artifactState,
   cardLabStyle,
   cardStyle,
@@ -69,10 +71,12 @@ export function SourceTray({
   showMatches,
   text,
   title,
+  tmdbAvailable,
   matchOverrides,
   workspacePhase,
 }: {
   canReviewMatches: boolean;
+  capabilityState: CapabilityState;
   artifactState: ArtifactState;
   cardLabStyle: CSSProperties;
   cardStyle: CardStyle;
@@ -111,6 +115,7 @@ export function SourceTray({
   showMatches: boolean;
   text: string;
   title: string;
+  tmdbAvailable: boolean;
   workspacePhase: WorkspacePhase;
 }) {
   const [intakeMode, setIntakeMode] = useState<IntakeMode>("describe");
@@ -182,7 +187,7 @@ export function SourceTray({
           </div>
           <p className="prompt-draft-status">
             {promptDraft
-              ? `Drafted ${promptDraft.items.length} items via ${formatToolName(promptDraft.suggested_enrichment_mode)}${promptDraft.cache_hit ? " from cache" : ""}. Review the list, then create the pack.`
+              ? `Drafted ${promptDraft.items.length} items via ${formatToolName(promptDraft.suggested_enrichment_mode)}${promptDraft.cache_hit ? " from cache" : ""}. ${promptDraft.warnings[0]?.message ?? "Review the list, then create the pack."}`
               : "Tierzo drafts a title and editable list before generation."}
           </p>
           {promptError ? <p className="error">{promptError}</p> : null}
@@ -294,10 +299,18 @@ export function SourceTray({
             >
               <option value="auto">Auto Agent</option>
               <option value="text">Text cards only</option>
-              <option value="tmdb_movie">Movie posters</option>
+              <option value="tmdb_movie" disabled={!tmdbAvailable}>
+                Movie posters{tmdbAvailable ? "" : " — unavailable"}
+              </option>
             </select>
             <small>
-              Pick automatic sourcing or force a specific asset mode.
+              {capabilityState === "loading"
+                ? "Checking external generation capabilities..."
+                : capabilityState === "unavailable"
+                  ? "External providers could not be verified. Auto and text cards remain available."
+                  : tmdbAvailable
+                    ? "Pick automatic sourcing or force a specific asset mode."
+                    : "Movie posters requires TMDb configuration. Auto and text cards remain available."}
             </small>
           </label>
           <CardLabPanel
@@ -367,6 +380,11 @@ export function SourceTray({
             {formatGenerationStatus(pack)}
           </p>
         ) : null}
+        {pack?.warnings.map((warning) => (
+          <p className="enrichment-status" key={warning.code}>
+            {warning.message}
+          </p>
+        ))}
         {pack?.agent_plan ? (
           <p className="enrichment-status">
             Tierzo read this as {pack.agent_plan.domain} and chose{" "}

@@ -24,11 +24,11 @@ export function formatGenerationStatus(pack: PersistedPackSnapshot) {
   }
 
   if (status.includes("missing_api_key")) {
-    return "Movie posters need a TMDb key. Generated text cards instead.";
+    return `Generated ${pack.item_count} text cards.`;
   }
 
   if (status.includes("error_fallback_text")) {
-    return "Movie poster lookup failed. Generated text cards instead.";
+    return `Generated ${pack.item_count} text cards.`;
   }
 
   return status;

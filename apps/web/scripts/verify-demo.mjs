@@ -205,7 +205,9 @@ try {
       return (
         workspace.tiers?.[0]?.label === expectedLabel &&
         workspace.pack?.pack_id &&
-        workspace.lastJobId
+        workspace.lastJobId &&
+        workspace.title === "Identity regeneration" &&
+        workspace.description === "Lifecycle recovery smoke"
       );
     },
     { key: workspaceStorageKey, expectedLabel: "Top picks" },
@@ -219,7 +221,28 @@ try {
     throw new Error("Expected persisted pack and job IDs before restoration.");
   }
 
-  await page.reload({ waitUntil: "networkidle" });
+  const statusRoute = `**/packs/${restoredPackId}/status`;
+  const completedStatusResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/packs/${restoredPackId}/status`) &&
+      response.request().method() === "GET",
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const completedStatusResponse = await completedStatusResponsePromise;
+  const completedStatusBody = await completedStatusResponse.json();
+  if (
+    completedStatusResponse.status() !== 200 ||
+    completedStatusBody.status !== "completed" ||
+    completedStatusBody.pack_id !== restoredPackId
+  ) {
+    throw new Error(
+      `Completed restore received an inconsistent real status response: ${JSON.stringify({
+        httpStatus: completedStatusResponse.status(),
+        body: completedStatusBody,
+      })}`,
+    );
+  }
+  // Artifact actions are asserted only after the real completed status above.
   await page
     .getByRole("link", { name: "Manifest", exact: true })
     .waitFor({ state: "visible" });
@@ -240,7 +263,6 @@ try {
     throw new Error("A completed pack was not retained after reload.");
   }
 
-  const statusRoute = `**/packs/${restoredPackId}/status`;
   await page.route(statusRoute, async (route) => {
     await route.fulfill({
       status: 200,
@@ -345,10 +367,14 @@ try {
   ) {
     throw new Error(`Manifest item identities are not unique: ${JSON.stringify(manifest.items)}`);
   }
+  const createdAtMs = Date.parse(manifest.created_at);
+  const expiresAtMs = Date.parse(manifest.expires_at);
   if (
     !utcTimestampPattern.test(manifest.created_at) ||
     !utcTimestampPattern.test(manifest.expires_at) ||
-    Date.parse(manifest.created_at) > Date.parse(manifest.expires_at)
+    !Number.isFinite(createdAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    createdAtMs >= expiresAtMs
   ) {
     throw new Error(
       `Manifest lifecycle timestamps are not ordered UTC Z values: ${JSON.stringify({

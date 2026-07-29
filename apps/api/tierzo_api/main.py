@@ -24,6 +24,7 @@ from tierzo.models import SourceItem, source_items_from_strings
 from tierzo.parsers import normalize_text, parse_text_lines
 from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
+from .environment import ROOT_DIR
 from .lifecycle import (
     PACK_LIFECYCLE_REGISTRY,
     STORAGE_DIR,
@@ -34,7 +35,6 @@ from .lifecycle import (
     utc_timestamp,
 )
 
-ROOT_DIR = Path(__file__).resolve().parents[3]
 AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
 PROMPT_DRAFT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "prompt-drafts"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
@@ -54,23 +54,6 @@ ALLOW_MANUAL_IMAGE_URLS = os.getenv("ALLOW_MANUAL_IMAGE_URLS", "false").lower() 
     "true",
     "yes",
 }
-
-def load_root_env() -> None:
-    env_path = ROOT_DIR / ".env"
-    if not env_path.exists():
-        return
-
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        normalized_key = key.strip()
-        if not os.environ.get(normalized_key):
-            os.environ[normalized_key] = value.strip().strip('"').strip("'")
-
-
-load_root_env()
 
 FONT_PATHS = {
     "default": None,
@@ -655,6 +638,20 @@ def build_pack(
     payload: GeneratePackRequest,
     progress_callback: ProgressCallback | None = None,
 ) -> GeneratePackResponse:
+    allocated_pack_ids: list[str] = []
+    try:
+        return _build_pack(payload, progress_callback, allocated_pack_ids)
+    except Exception:
+        for pack_id in allocated_pack_ids:
+            PACK_LIFECYCLE_REGISTRY.discard(pack_id)
+        raise
+
+
+def _build_pack(
+    payload: GeneratePackRequest,
+    progress_callback: ProgressCallback | None,
+    allocated_pack_ids: list[str],
+) -> GeneratePackResponse:
     agent_plan: IntakePlan | None = None
     enrichment_mode = payload.enrichment_mode
     cleanup_expired_storage()
@@ -721,6 +718,7 @@ def build_pack(
         )
 
     pack_id = uuid.uuid4().hex
+    allocated_pack_ids.append(pack_id)
     output_dir = STORAGE_DIR / pack_id
     zip_path = STORAGE_DIR / f"{pack_id}.zip"
     lifecycle = PACK_LIFECYCLE_REGISTRY.new_lifecycle(pack_id, PACK_TTL_SECONDS)

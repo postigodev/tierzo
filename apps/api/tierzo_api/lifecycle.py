@@ -13,6 +13,8 @@ from typing import Callable, Literal
 
 from fastapi import HTTPException
 
+from .environment import ROOT_DIR
+
 
 PackStatus = Literal["completed", "expired", "lost"]
 _SAFE_PACK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
@@ -134,6 +136,15 @@ class PackLifecycleRegistry:
                     continue
                 self._delete_artifacts(pack_id)
                 self._remember_expired(lifecycle, now)
+
+    def discard(self, pack_id: str) -> bool:
+        """Remove only artifacts owned by one safely formed pack identifier."""
+        if not _SAFE_PACK_ID.fullmatch(pack_id):
+            return False
+        with self._lock:
+            self._delete_artifacts(pack_id)
+            self._tombstones.pop(pack_id, None)
+        return True
 
     def _now(self) -> datetime:
         now = self._clock()
@@ -282,7 +293,6 @@ class PackLifecycleRegistry:
                 self._tombstones.pop(pack_id, None)
 
 
-ROOT_DIR = Path(__file__).resolve().parents[3]
 STORAGE_DIR = Path(
     os.getenv("TIERZO_STORAGE_DIR", ROOT_DIR / ".tierzo" / "storage")
 ).resolve()

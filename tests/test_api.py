@@ -10,7 +10,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
@@ -155,6 +155,74 @@ class TierzoApiTests(unittest.TestCase):
         status_response = client.get(f"/packs/{pack_id}/status")
         self.assertEqual(status_response.status_code, 200)
         self.assertEqual(status_response.json()["status"], "expired")
+
+    def test_failed_pack_generation_discards_only_allocated_artifacts(self) -> None:
+        tierzo_test_dir = api_main.ROOT_DIR / ".tierzo"
+        tierzo_test_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tierzo_test_dir) as temporary_directory:
+            storage_dir = Path(temporary_directory)
+            registry = PackLifecycleRegistry(storage_dir)
+            unrelated_dir = storage_dir / "unrelated-pack"
+            unrelated_dir.mkdir()
+            unrelated_file = unrelated_dir / "keep.txt"
+            unrelated_file.write_text("keep", encoding="utf-8")
+            unrelated_zip = storage_dir / "unrelated-pack.zip"
+            unrelated_zip.write_bytes(b"keep")
+
+            def fail_after_partial_write(
+                _items: object,
+                output_dir: Path,
+                **_kwargs: object,
+            ) -> None:
+                output_dir.mkdir(parents=True)
+                (output_dir / "partial.png").write_bytes(b"partial")
+                (output_dir.parent / f"{output_dir.name}.zip").write_bytes(
+                    b"partial"
+                )
+                raise RuntimeError("render failed")
+
+            allocated_uuid = Mock(hex="allocated-pack")
+            client = TestClient(app, raise_server_exceptions=False)
+            with (
+                patch.object(api_main, "STORAGE_DIR", storage_dir),
+                patch.object(api_main, "PACK_LIFECYCLE_REGISTRY", registry),
+                patch.object(api_main.uuid, "uuid4", return_value=allocated_uuid),
+                patch.object(
+                    api_main,
+                    "generate_pack_from_items",
+                    side_effect=fail_after_partial_write,
+                ),
+            ):
+                response = client.post(
+                    "/packs",
+                    json={
+                        "text": "Mario",
+                        "preset": "clean",
+                        "size": 256,
+                        "filename_mode": "both",
+                        "title": "Partial failure",
+                        "enrichment_mode": "text",
+                    },
+                )
+
+            self.assertEqual(response.status_code, 500)
+            self.assertFalse((storage_dir / "allocated-pack").exists())
+            self.assertFalse((storage_dir / "allocated-pack.zip").exists())
+            self.assertEqual(unrelated_file.read_text(encoding="utf-8"), "keep")
+            self.assertEqual(unrelated_zip.read_bytes(), b"keep")
+
+    def test_discard_rejects_pack_id_path_traversal(self) -> None:
+        tierzo_test_dir = api_main.ROOT_DIR / ".tierzo"
+        tierzo_test_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tierzo_test_dir) as temporary_directory:
+            storage_dir = Path(temporary_directory) / "storage"
+            storage_dir.mkdir()
+            outside_file = Path(temporary_directory) / "outside.zip"
+            outside_file.write_bytes(b"keep")
+            registry = PackLifecycleRegistry(storage_dir)
+
+            self.assertFalse(registry.discard("../outside"))
+            self.assertEqual(outside_file.read_bytes(), b"keep")
 
     def test_required_artifact_loss_is_structured_and_shared_by_all_routes(self) -> None:
         client = TestClient(app)

@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
+from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
 from PIL import Image
 
@@ -25,6 +26,10 @@ from tierzo.enrichers import EnrichedAsset  # noqa: E402
 
 
 class TierzoApiTests(unittest.TestCase):
+    timestamp_pattern = re.compile(
+        r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+    )
+
     def create_text_pack(self, client: TestClient, title: str) -> dict[str, object]:
         response = client.post(
             "/packs",
@@ -63,13 +68,9 @@ class TierzoApiTests(unittest.TestCase):
         client = TestClient(app)
         pack = self.create_text_pack(client, "Lifecycle completed")
         pack_id = str(pack["pack_id"])
-        timestamp_pattern = re.compile(
-            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
-        )
-
         self.assertEqual(pack["status"], "completed")
-        self.assertRegex(str(pack["created_at"]), timestamp_pattern)
-        self.assertRegex(str(pack["expires_at"]), timestamp_pattern)
+        self.assertRegex(str(pack["created_at"]), self.timestamp_pattern)
+        self.assertRegex(str(pack["expires_at"]), self.timestamp_pattern)
 
         manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
         original_mtime_ns = manifest_path.stat().st_mtime_ns
@@ -570,6 +571,209 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["pack"]["item_count"], 2)
         self.assertEqual(job["steps"][-1]["status"], "done")
+
+    def test_generation_job_uses_pending_and_running_with_utc_timestamps(self) -> None:
+        registry = api_main.JobRegistry()
+        client = TestClient(app)
+
+        with (
+            patch.object(api_main, "JOBS", registry),
+            patch.object(BackgroundTasks, "add_task", return_value=None),
+        ):
+            created_response = client.post(
+                "/jobs",
+                json={"text": "Mario", "enrichment_mode": "text"},
+            )
+            created = created_response.json()
+            pending = client.get(f"/jobs/{created['job_id']}").json()
+            registry.mark_running(created["job_id"])
+            running = client.get(f"/jobs/{created['job_id']}").json()
+
+        self.assertEqual(created_response.status_code, 200)
+        self.assertEqual(created["status"], "pending")
+        self.assertEqual(pending["status"], "pending")
+        self.assertEqual(running["status"], "running")
+        self.assertRegex(pending["created_at"], self.timestamp_pattern)
+        self.assertRegex(pending["updated_at"], self.timestamp_pattern)
+        self.assertRegex(running["updated_at"], self.timestamp_pattern)
+        self.assertIsNone(pending["pack_status"])
+
+    def test_generation_job_failure_is_terminal_and_timestamped(self) -> None:
+        registry = api_main.JobRegistry()
+        client = TestClient(app)
+
+        with (
+            patch.object(api_main, "JOBS", registry),
+            patch.object(
+                api_main,
+                "build_pack",
+                side_effect=RuntimeError("render exploded"),
+            ),
+        ):
+            created = client.post(
+                "/jobs",
+                json={"text": "Mario", "enrichment_mode": "text"},
+            ).json()
+            failed = client.get(f"/jobs/{created['job_id']}").json()
+
+        self.assertEqual(failed["status"], "failed")
+        self.assertEqual(failed["error"], "Tierzo could not generate this pack.")
+        self.assertRegex(failed["created_at"], self.timestamp_pattern)
+        self.assertRegex(failed["updated_at"], self.timestamp_pattern)
+        self.assertIsNone(failed["pack"])
+        self.assertIsNone(failed["pack_status"])
+
+    def test_unknown_generation_job_is_typed_lost(self) -> None:
+        registry = api_main.JobRegistry()
+        client = TestClient(app)
+        with patch.object(api_main, "JOBS", registry):
+            response = client.get("/jobs/unknown-job")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "job_id": "unknown-job",
+                "status": "lost",
+                "created_at": None,
+                "updated_at": None,
+                "steps": [],
+                "pack": None,
+                "pack_status": None,
+                "error": None,
+            },
+        )
+
+    def test_completed_job_preserves_success_when_pack_expires_or_is_lost(self) -> None:
+        registry = api_main.JobRegistry()
+        client = TestClient(app)
+
+        with patch.object(api_main, "JOBS", registry):
+            expired_created = client.post(
+                "/jobs",
+                json={
+                    "text": "Mario",
+                    "title": "Expired job pack",
+                    "enrichment_mode": "text",
+                },
+            ).json()
+            expired_before = client.get(
+                f"/jobs/{expired_created['job_id']}"
+            ).json()
+            expired_pack_id = expired_before["pack"]["pack_id"]
+            self.addCleanup(
+                shutil.rmtree,
+                api_main.STORAGE_DIR / expired_pack_id,
+                True,
+            )
+            self.addCleanup(
+                (api_main.STORAGE_DIR / f"{expired_pack_id}.zip").unlink,
+                True,
+            )
+            self.expire_manifest(expired_pack_id)
+            expired_after = client.get(
+                f"/jobs/{expired_created['job_id']}"
+            ).json()
+
+            lost_created = client.post(
+                "/jobs",
+                json={
+                    "text": "Luigi",
+                    "title": "Lost job pack",
+                    "enrichment_mode": "text",
+                },
+            ).json()
+            lost_before = client.get(f"/jobs/{lost_created['job_id']}").json()
+            lost_pack_id = lost_before["pack"]["pack_id"]
+            self.addCleanup(
+                shutil.rmtree,
+                api_main.STORAGE_DIR / lost_pack_id,
+                True,
+            )
+            lost_zip = api_main.STORAGE_DIR / f"{lost_pack_id}.zip"
+            self.addCleanup(lost_zip.unlink, True)
+            lost_zip.unlink()
+            lost_after = client.get(f"/jobs/{lost_created['job_id']}").json()
+
+        self.assertEqual(expired_before["pack_status"], "completed")
+        self.assertEqual(expired_after["status"], "completed")
+        self.assertEqual(expired_after["pack_status"], "expired")
+        self.assertEqual(expired_after["pack"]["pack_id"], expired_pack_id)
+        self.assertEqual(lost_before["pack_status"], "completed")
+        self.assertEqual(lost_after["status"], "completed")
+        self.assertEqual(lost_after["pack_status"], "lost")
+        self.assertEqual(lost_after["pack"]["pack_id"], lost_pack_id)
+
+    def test_generation_job_capacity_rejects_without_evicting_active_jobs(self) -> None:
+        registry = api_main.JobRegistry(active_capacity=1)
+        registry.admit("existing", api_main.default_job_steps())
+        client = TestClient(app)
+
+        with (
+            patch.object(api_main, "JOBS", registry),
+            patch.object(BackgroundTasks, "add_task", return_value=None),
+        ):
+            rejected = client.post(
+                "/jobs",
+                json={"text": "Mario", "enrichment_mode": "text"},
+            )
+            existing = client.get("/jobs/existing")
+
+        self.assertEqual(rejected.status_code, 503)
+        self.assertEqual(
+            rejected.json()["detail"]["code"],
+            "job_capacity_reached",
+        )
+        self.assertEqual(existing.status_code, 200)
+        self.assertEqual(existing.json()["status"], "pending")
+
+    def test_terminal_job_retention_and_capacity_are_bounded(self) -> None:
+        now = datetime(2025, 1, 1, tzinfo=UTC)
+        current_time = [now]
+        registry = api_main.JobRegistry(
+            terminal_capacity=1,
+            terminal_retention_seconds=10,
+            clock=lambda: current_time[0],
+        )
+
+        registry.admit("first", api_main.default_job_steps())
+        registry.mark_failed("first", "first failed")
+        current_time[0] = now + timedelta(seconds=1)
+        registry.admit("second", api_main.default_job_steps())
+        registry.mark_failed("second", "second failed")
+
+        self.assertIsNone(registry.get("first"))
+        self.assertEqual(registry.get("second").status, "failed")
+
+        current_time[0] = now + timedelta(seconds=10)
+        self.assertEqual(registry.get("second").status, "failed")
+        current_time[0] = now + timedelta(seconds=11)
+        self.assertIsNone(registry.get("second"))
+
+    def test_active_jobs_are_never_removed_by_terminal_cleanup(self) -> None:
+        now = datetime(2025, 1, 1, tzinfo=UTC)
+        current_time = [now]
+        registry = api_main.JobRegistry(
+            active_capacity=2,
+            terminal_capacity=0,
+            terminal_retention_seconds=0,
+            clock=lambda: current_time[0],
+        )
+
+        self.assertIsNotNone(
+            registry.admit("pending", api_main.default_job_steps())
+        )
+        self.assertIsNotNone(
+            registry.admit("running", api_main.default_job_steps())
+        )
+        registry.mark_running("running")
+        current_time[0] = now + timedelta(days=365)
+
+        self.assertEqual(registry.get("pending").status, "pending")
+        self.assertEqual(registry.get("running").status, "running")
+        self.assertIsNone(
+            registry.admit("rejected", api_main.default_job_steps())
+        )
 
     def test_asset_override_can_force_text_card(self) -> None:
         client = TestClient(app)

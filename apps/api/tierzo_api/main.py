@@ -3,8 +3,11 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
 import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -28,6 +31,7 @@ from .lifecycle import (
     lifecycle_error_detail,
     require_available_pack,
     resolve_pack_lifecycle,
+    utc_timestamp,
 )
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
@@ -36,6 +40,11 @@ PROMPT_DRAFT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "prompt-drafts"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 MAX_LIST_ITEMS = int(os.getenv("MAX_LIST_ITEMS", "200"))
 PACK_TTL_SECONDS = int(os.getenv("PACK_TTL_SECONDS", "3600"))
+JOB_ACTIVE_CAPACITY = int(os.getenv("JOB_ACTIVE_CAPACITY", "8"))
+JOB_TERMINAL_CAPACITY = int(os.getenv("JOB_TERMINAL_CAPACITY", "1024"))
+JOB_TERMINAL_RETENTION_SECONDS = float(
+    os.getenv("JOB_TERMINAL_RETENTION_SECONDS", "3600")
+)
 DEFAULT_FRONTEND_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -245,7 +254,7 @@ class PackLifecycleResponse(BaseModel):
 
 class CreateJobResponse(BaseModel):
     job_id: str
-    status: str
+    status: Literal["pending"]
 
 
 class JobStepResponse(BaseModel):
@@ -257,19 +266,210 @@ class JobStepResponse(BaseModel):
 
 class JobResponse(BaseModel):
     job_id: str
-    status: str
+    status: Literal["pending", "running", "completed", "failed", "lost"]
+    created_at: str | None = None
+    updated_at: str | None = None
     steps: list[JobStepResponse]
     pack: GeneratePackResponse | None = None
+    pack_status: Literal["completed", "expired", "lost"] | None = None
     error: str | None = None
+
+
+JobStatus = Literal["pending", "running", "completed", "failed"]
+_ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed"})
 
 
 @dataclass
 class JobRecord:
     job_id: str
-    status: str = "queued"
+    created_at: str
+    updated_at: str
+    status: JobStatus = "pending"
     steps: list[JobStepResponse] = field(default_factory=list)
     pack: GeneratePackResponse | None = None
     error: str | None = None
+    terminal_at: datetime | None = field(default=None, repr=False)
+
+
+class JobRegistry:
+    def __init__(
+        self,
+        *,
+        active_capacity: int = JOB_ACTIVE_CAPACITY,
+        terminal_capacity: int = JOB_TERMINAL_CAPACITY,
+        terminal_retention_seconds: float = JOB_TERMINAL_RETENTION_SECONDS,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.active_capacity = max(0, active_capacity)
+        self.terminal_capacity = max(0, terminal_capacity)
+        self.terminal_retention_seconds = max(
+            0.0,
+            terminal_retention_seconds,
+        )
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._jobs: OrderedDict[str, JobRecord] = OrderedDict()
+        self._lock = threading.RLock()
+
+    def admit(
+        self,
+        job_id: str,
+        steps: list[JobStepResponse],
+    ) -> JobRecord | None:
+        now = self._now()
+        with self._lock:
+            self._cleanup_terminal(now)
+            active_count = sum(
+                job.status in _ACTIVE_JOB_STATUSES
+                for job in self._jobs.values()
+            )
+            if active_count >= self.active_capacity:
+                return None
+            if job_id in self._jobs:
+                raise ValueError(f"Job {job_id} already exists.")
+            timestamp = utc_timestamp(now)
+            job = JobRecord(
+                job_id=job_id,
+                created_at=timestamp,
+                updated_at=timestamp,
+                steps=[step.model_copy(deep=True) for step in steps],
+            )
+            self._jobs[job_id] = job
+            return self._snapshot(job)
+
+    def get(self, job_id: str) -> JobRecord | None:
+        now = self._now()
+        with self._lock:
+            self._cleanup_terminal(now)
+            job = self._jobs.get(job_id)
+            return self._snapshot(job) if job is not None else None
+
+    def mark_running(self, job_id: str) -> bool:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status != "pending":
+                return False
+            job.status = "running"
+            self._touch(job, now)
+            return True
+
+    def update_step(
+        self,
+        job_id: str,
+        step_id: str,
+        status: str,
+        detail: str | None = None,
+    ) -> None:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status not in _ACTIVE_JOB_STATUSES:
+                return
+            job.steps = [
+                step.model_copy(update={"status": status, "detail": detail})
+                if step.id == step_id
+                else step
+                for step in job.steps
+            ]
+            self._touch(job, now)
+
+    def step_status(self, job_id: str, step_id: str) -> str | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            return next(
+                (step.status for step in job.steps if step.id == step_id),
+                None,
+            )
+
+    def complete(
+        self,
+        job_id: str,
+        pack: GeneratePackResponse,
+    ) -> None:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status not in _ACTIVE_JOB_STATUSES:
+                return
+            job.pack = pack
+            job.status = "completed"
+            job.terminal_at = now
+            self._touch(job, now)
+            self._jobs.move_to_end(job_id)
+            self._cleanup_terminal(now)
+
+    def mark_failed(
+        self,
+        job_id: str,
+        error: str,
+        step_detail: str | None = None,
+    ) -> None:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status not in _ACTIVE_JOB_STATUSES:
+                return
+            job.status = "failed"
+            job.error = error
+            for index, step in enumerate(job.steps):
+                if step.status in {"pending", "running"}:
+                    job.steps[index] = step.model_copy(
+                        update={"status": "error", "detail": step_detail}
+                    )
+                    break
+            job.terminal_at = now
+            self._touch(job, now)
+            self._jobs.move_to_end(job_id)
+            self._cleanup_terminal(now)
+
+    def _cleanup_terminal(self, now: datetime) -> None:
+        expired_ids = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if (
+                job.status in _TERMINAL_JOB_STATUSES
+                and job.terminal_at is not None
+                and (now - job.terminal_at).total_seconds()
+                >= self.terminal_retention_seconds
+            )
+        ]
+        for job_id in expired_ids:
+            self._jobs.pop(job_id, None)
+
+        terminal_ids = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.status in _TERMINAL_JOB_STATUSES
+        ]
+        excess_count = max(0, len(terminal_ids) - self.terminal_capacity)
+        for job_id in terminal_ids[:excess_count]:
+            self._jobs.pop(job_id, None)
+
+    def _now(self) -> datetime:
+        now = self._clock()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        return now.astimezone(UTC)
+
+    @staticmethod
+    def _touch(job: JobRecord, now: datetime) -> None:
+        job.updated_at = utc_timestamp(now)
+
+    @staticmethod
+    def _snapshot(job: JobRecord) -> JobRecord:
+        return JobRecord(
+            job_id=job.job_id,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+            status=job.status,
+            steps=[step.model_copy(deep=True) for step in job.steps],
+            pack=job.pack.model_copy(deep=True) if job.pack is not None else None,
+            error=job.error,
+            terminal_at=job.terminal_at,
+        )
 
 
 class TierMakerImagePayload(BaseModel):
@@ -336,7 +536,7 @@ def on_startup() -> None:
     cleanup_expired_storage()
 
 
-JOBS: dict[str, JobRecord] = {}
+JOBS = JobRegistry()
 
 
 @app.get("/health")
@@ -403,17 +603,12 @@ def default_job_steps() -> list[JobStepResponse]:
 
 
 def update_job_step(
-    job: JobRecord,
+    job_id: str,
     step_id: str,
     status: str,
     detail: str | None = None,
 ) -> None:
-    job.steps = [
-        step.model_copy(update={"status": status, "detail": detail})
-        if step.id == step_id
-        else step
-        for step in job.steps
-    ]
+    JOBS.update_step(job_id, step_id, status, detail)
 
 
 def summarize_asset_step(pack: GeneratePackResponse) -> tuple[str, str | None]:
@@ -744,70 +939,63 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
 
 
 def run_generation_job(job_id: str, payload: GeneratePackRequest) -> None:
-    job = JOBS[job_id]
-    job.status = "running"
-    update_job_step(job, "read", "running")
+    if not JOBS.mark_running(job_id):
+        return
+    update_job_step(job_id, "read", "running")
 
     try:
         source_items, _ = source_items_from_payload(payload)
         if not source_items:
             raise HTTPException(status_code=400, detail="No non-empty items found.")
 
-        update_job_step(job, "read", "done", f"Found {len(source_items)} source items.")
-        update_job_step(job, "plan", "running")
+        update_job_step(job_id, "read", "done", f"Found {len(source_items)} source items.")
+        update_job_step(job_id, "plan", "running")
 
         if payload.enrichment_mode != "auto":
-            update_job_step(job, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
+            update_job_step(job_id, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
 
         def on_progress(event: str, detail: str | None) -> None:
             if event == "plan_done":
-                update_job_step(job, "plan", "done", detail)
+                update_job_step(job_id, "plan", "done", detail)
             elif event == "assets_running":
-                update_job_step(job, "assets", "running", detail)
+                update_job_step(job_id, "assets", "running", detail)
             elif event == "assets_done":
-                update_job_step(job, "assets", "done", detail)
+                update_job_step(job_id, "assets", "done", detail)
             elif event == "assets_warning":
-                update_job_step(job, "assets", "warning", detail)
+                update_job_step(job_id, "assets", "warning", detail)
             elif event == "render_running":
-                update_job_step(job, "render", "running", detail)
+                update_job_step(job_id, "render", "running", detail)
             elif event == "render_done":
-                update_job_step(job, "render", "done", detail)
+                update_job_step(job_id, "render", "done", detail)
             elif event == "export_running":
-                update_job_step(job, "export", "running", detail)
+                update_job_step(job_id, "export", "running", detail)
             elif event == "export_done":
-                update_job_step(job, "export", "done", detail)
+                update_job_step(job_id, "export", "done", detail)
 
         pack = build_pack(payload, progress_callback=on_progress)
 
         if pack.agent_plan:
-            if next(step for step in job.steps if step.id == "plan").status != "done":
+            if JOBS.step_status(job_id, "plan") != "done":
                 source = "cache" if pack.agent_plan.get("cache_hit") else pack.agent_plan.get("source", "agent")
                 update_job_step(
-                    job,
+                    job_id,
                     "plan",
                     "done",
                     f"Picked {pack.agent_plan.get('domain')} via {source}.",
                 )
         else:
-            if next(step for step in job.steps if step.id == "plan").status != "done":
-                update_job_step(job, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
+            if JOBS.step_status(job_id, "plan") != "done":
+                update_job_step(job_id, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
 
-        job.pack = pack
-        job.status = "completed"
+        JOBS.complete(job_id, pack)
     except HTTPException as exc:
-        job.status = "failed"
-        job.error = str(exc.detail)
-        for step in job.steps:
-            if step.status in {"pending", "running"}:
-                update_job_step(job, step.id, "error")
-                break
+        JOBS.mark_failed(job_id, str(exc.detail))
     except Exception as exc:
-        job.status = "failed"
-        job.error = "Tierzo could not generate this pack."
-        for step in job.steps:
-            if step.status in {"pending", "running"}:
-                update_job_step(job, step.id, "error", str(exc))
-                break
+        JOBS.mark_failed(
+            job_id,
+            "Tierzo could not generate this pack.",
+            str(exc),
+        )
 
 
 def format_tool_for_step(tool: str) -> str:
@@ -824,21 +1012,41 @@ def create_generation_job(
     background_tasks: BackgroundTasks,
 ) -> CreateJobResponse:
     job_id = uuid.uuid4().hex
-    JOBS[job_id] = JobRecord(job_id=job_id, steps=default_job_steps())
+    job = JOBS.admit(job_id, default_job_steps())
+    if job is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "job_capacity_reached",
+                "resource": "job",
+                "status": "rejected",
+                "active_capacity": JOBS.active_capacity,
+            },
+        )
     background_tasks.add_task(run_generation_job, job_id, payload)
-    return CreateJobResponse(job_id=job_id, status="queued")
+    return CreateJobResponse(job_id=job_id, status="pending")
 
 
 @app.get("/jobs/{job_id}", response_model=JobResponse)
 def get_generation_job(job_id: str) -> JobResponse:
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        return JobResponse(
+            job_id=job_id,
+            status="lost",
+            steps=[],
+        )
+    pack_status = None
+    if job.status == "completed" and job.pack is not None:
+        pack_status = resolve_pack_lifecycle(job.pack.pack_id).status
     return JobResponse(
         job_id=job.job_id,
         status=job.status,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
         steps=job.steps,
         pack=job.pack,
+        pack_status=pack_status,
         error=job.error,
     )
 

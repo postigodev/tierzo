@@ -21,7 +21,7 @@ sys.path.append(str(Path("apps/api").resolve()))
 from tierzo_api.main import app  # noqa: E402
 from tierzo_api.lifecycle import PackLifecycleRegistry  # noqa: E402
 from tierzo_api import main as api_main  # noqa: E402
-from tierzo.agentic import IntakePlan  # noqa: E402
+from tierzo.agentic import IntakePlan, PromptDraft  # noqa: E402
 from tierzo.enrichers import EnrichedAsset  # noqa: E402
 
 
@@ -52,6 +52,128 @@ class TierzoApiTests(unittest.TestCase):
 
         self.addCleanup(remove_pack_artifacts)
         return pack
+
+    def test_capabilities_describe_configured_and_deterministic_paths(self) -> None:
+        client = TestClient(app)
+        with patch.dict(os.environ, {}, clear=True):
+            unconfigured = client.get("/capabilities")
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "openai", "TMDB_API_KEY": "tmdb"},
+            clear=True,
+        ):
+            configured = client.get("/capabilities")
+
+        self.assertEqual(unconfigured.status_code, 200)
+        body = unconfigured.json()
+        self.assertEqual(body["schema_version"], "tierzo.capabilities.v1")
+        self.assertEqual(
+            body["capabilities"]["text_cards"]["effective_mode"],
+            "deterministic",
+        )
+        self.assertEqual(
+            body["capabilities"]["prompt_drafting"]["effective_mode"],
+            "heuristic",
+        )
+        self.assertEqual(
+            body["capabilities"]["tmdb_movie"]["reason_code"],
+            "tmdb_unconfigured",
+        )
+        self.assertEqual(
+            configured.json()["capabilities"]["prompt_drafting"]["effective_mode"],
+            "openai",
+        )
+        self.assertEqual(
+            configured.json()["capabilities"]["tmdb_movie"]["effective_mode"],
+            "tmdb",
+        )
+
+    def test_prompt_draft_uses_structured_heuristic_fallback_without_openai(
+        self,
+    ) -> None:
+        client = TestClient(app)
+        with patch.dict(os.environ, {}, clear=True):
+            response = client.post(
+                "/prompt-drafts",
+                json={"prompt": "Rank these: Alien, Aliens, Arrival"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["items"], ["Alien", "Aliens", "Arrival"])
+        self.assertEqual(body["source"], "heuristic")
+        self.assertEqual(body["outcome"], "degraded")
+        self.assertEqual(
+            [warning["code"] for warning in body["warnings"]],
+            ["openai_unconfigured_heuristic"],
+        )
+        self.assertEqual(body["suggested_enrichment_mode"], "auto")
+
+    def test_prompt_draft_clamps_unavailable_tmdb_suggestion(self) -> None:
+        client = TestClient(app)
+        draft = PromptDraft(
+            title="Movies",
+            description=None,
+            items=["Alien", "Aliens"],
+            suggested_enrichment_mode="tmdb_movie",
+            confidence=0.8,
+            source="heuristic",
+        )
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch.object(api_main, "draft_prompt_to_tierlist", return_value=draft),
+        ):
+            response = client.post(
+                "/prompt-drafts",
+                json={"prompt": "Alien, Aliens"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["suggested_enrichment_mode"], "text")
+        self.assertEqual(
+            [warning["code"] for warning in response.json()["warnings"]],
+            ["openai_unconfigured_heuristic", "tmdb_unconfigured_text_fallback"],
+        )
+
+    def test_prompt_draft_rejects_vague_prompt_without_openai(self) -> None:
+        client = TestClient(app)
+        with patch.dict(os.environ, {}, clear=True):
+            response = client.post(
+                "/prompt-drafts",
+                json={"prompt": "best alien movies"},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(
+            response.json()["detail"]["code"],
+            "prompt_requires_explicit_items_without_ai",
+        )
+
+    def test_prompt_draft_reports_openai_provider_fallback(self) -> None:
+        client = TestClient(app)
+        fallback = PromptDraft(
+            title="Fallback",
+            description=None,
+            items=["Alien", "Aliens"],
+            suggested_enrichment_mode="text",
+            confidence=0.55,
+            source="heuristic",
+        )
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test"}, clear=True),
+            patch.object(api_main, "draft_prompt_to_tierlist", return_value=fallback),
+        ):
+            response = client.post(
+                "/prompt-drafts",
+                json={"prompt": "Alien, Aliens"},
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["outcome"], "degraded")
+        self.assertEqual(
+            response.json()["warnings"][0]["code"],
+            "openai_provider_heuristic_fallback",
+        )
 
     def expire_manifest(self, pack_id: str) -> Path:
         manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
@@ -560,6 +682,11 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertIn("missing_api_key", body["enrichment_status"])
+        self.assertEqual(body["outcome"], "degraded")
+        self.assertEqual(
+            body["warnings"][0]["code"],
+            "tmdb_unconfigured_text_fallback",
+        )
         manifest_response = client.get(body["manifest_url"])
         manifest_body = manifest_response.json()
         self.assertEqual(manifest_body["enrichment"]["mode"], "tmdb_movie")
@@ -595,8 +722,57 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertIn("error_fallback_text", body["enrichment_status"])
+        self.assertEqual(body["outcome"], "degraded")
+        self.assertEqual(
+            body["warnings"][0]["code"],
+            "tmdb_provider_text_fallback",
+        )
         manifest_body = client.get(body["manifest_url"]).json()
         self.assertEqual(manifest_body["items"][0]["asset_kind"], "text-card")
+
+    def test_partial_tmdb_match_is_structured_degraded_success(self) -> None:
+        client = TestClient(app)
+        fake_image = Path(".tierzo/test-partial-source.png").resolve()
+        fake_image.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (32, 32), "#ff0000").save(fake_image)
+        self.addCleanup(fake_image.unlink, True)
+
+        def fake_enrich_many(
+            _self: object,
+            _values: list[str],
+            _image_dir: Path,
+        ) -> dict[str, EnrichedAsset]:
+            return {
+                "Alien": EnrichedAsset(
+                    query="Alien",
+                    title="Alien",
+                    source_type="tmdb",
+                    source_value="348",
+                    source_url="https://www.themoviedb.org/movie/348",
+                    image_path=fake_image,
+                    confidence=0.98,
+                )
+            }
+
+        with (
+            patch.dict(os.environ, {"TMDB_API_KEY": "test"}, clear=True),
+            patch("tierzo_api.main.TmdbMovieEnricher.enrich_many", fake_enrich_many),
+        ):
+            response = client.post(
+                "/packs",
+                json={
+                    "text": "Alien\nThe Thing",
+                    "title": "Partial",
+                    "enrichment_mode": "tmdb_movie",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["outcome"], "degraded")
+        self.assertEqual(
+            response.json()["warnings"][0]["code"],
+            "tmdb_partial_match",
+        )
 
     def test_rejects_too_many_input_items(self) -> None:
         client = TestClient(app)
@@ -644,6 +820,45 @@ class TierzoApiTests(unittest.TestCase):
         self.assertIsNotNone(body["agent_plan"])
         self.assertEqual(body["agent_plan"]["source"], "heuristic")
         self.assertEqual(body["agent_plan"]["tool"], "text")
+        self.assertEqual(body["outcome"], "degraded")
+        self.assertEqual(
+            body["warnings"][0]["code"],
+            "openai_unconfigured_heuristic",
+        )
+
+    def test_auto_agent_resolves_unsupported_planner_tool_to_text(self) -> None:
+        client = TestClient(app)
+        plan = IntakePlan(
+            domain="games",
+            tool="steam",
+            items=["Portal", "Half-Life"],
+            confidence=0.9,
+            questions=[],
+            source="openai",
+        )
+        with (
+            patch.dict(os.environ, {"OPENAI_API_KEY": "test"}, clear=True),
+            patch.object(api_main, "plan_intake", return_value=plan),
+        ):
+            response = client.post(
+                "/packs",
+                json={
+                    "items": [
+                        {"id": "portal", "name": "Portal"},
+                        {"id": "half-life", "name": "Half-Life"},
+                    ],
+                    "title": "Unsupported planner",
+                    "enrichment_mode": "auto",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["enrichment_status"], "text")
+        self.assertEqual(response.json()["outcome"], "degraded")
+        self.assertEqual(
+            response.json()["warnings"][0]["code"],
+            "unsupported_planner_tool_text_fallback",
+        )
 
     def test_generation_job_tracks_steps_and_returns_pack(self) -> None:
         client = TestClient(app)
@@ -668,6 +883,8 @@ class TierzoApiTests(unittest.TestCase):
         job = job_response.json()
         self.assertEqual(job["status"], "completed")
         self.assertEqual(job["pack"]["item_count"], 2)
+        self.assertEqual(job["pack"]["outcome"], "normal")
+        self.assertEqual(job["pack"]["warnings"], [])
         self.assertEqual(job["steps"][-1]["status"], "done")
 
     def test_generation_job_uses_pending_and_running_with_utc_timestamps(self) -> None:

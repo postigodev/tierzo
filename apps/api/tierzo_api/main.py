@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-import shutil
-import time
-import uuid
+import json
 import os
+import shutil
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
@@ -21,11 +21,16 @@ from tierzo.models import SourceItem, source_items_from_strings
 from tierzo.parsers import normalize_text, parse_text_lines
 from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
+from .lifecycle import (
+    PACK_LIFECYCLE_REGISTRY,
+    STORAGE_DIR,
+    PackLifecycle,
+    lifecycle_error_detail,
+    require_available_pack,
+    resolve_pack_lifecycle,
+)
 
 ROOT_DIR = Path(__file__).resolve().parents[3]
-STORAGE_DIR = Path(
-    os.getenv("TIERZO_STORAGE_DIR", ROOT_DIR / ".tierzo" / "storage")
-).resolve()
 AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
 PROMPT_DRAFT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "prompt-drafts"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
@@ -216,6 +221,9 @@ class PackItemResponse(BaseModel):
 
 class GeneratePackResponse(BaseModel):
     pack_id: str
+    status: Literal["completed"]
+    created_at: str
+    expires_at: str
     title: str
     description: str | None
     row_labels: list[str]
@@ -226,6 +234,13 @@ class GeneratePackResponse(BaseModel):
     extension_url: str
     enrichment_status: str
     agent_plan: dict[str, object] | None = None
+
+
+class PackLifecycleResponse(BaseModel):
+    pack_id: str
+    status: Literal["completed", "expired", "lost"]
+    created_at: str | None = None
+    expires_at: str | None = None
 
 
 class CreateJobResponse(BaseModel):
@@ -301,21 +316,7 @@ def allowed_cors_origins() -> list[str]:
 
 
 def cleanup_expired_storage() -> None:
-    if not STORAGE_DIR.exists():
-        return
-    cutoff = time.time() - PACK_TTL_SECONDS
-    for child in STORAGE_DIR.iterdir():
-        try:
-            if child.is_dir():
-                modified = child.stat().st_mtime
-                if modified < cutoff:
-                    shutil.rmtree(child)
-            elif child.is_file() and child.suffix == ".zip":
-                modified = child.stat().st_mtime
-                if modified < cutoff:
-                    child.unlink()
-        except Exception:
-            continue
+    PACK_LIFECYCLE_REGISTRY.cleanup_expired()
 
 
 app = FastAPI(title="Tierzo API", version="0.1.0")
@@ -527,6 +528,9 @@ def build_pack(
     pack_id = uuid.uuid4().hex
     output_dir = STORAGE_DIR / pack_id
     zip_path = STORAGE_DIR / f"{pack_id}.zip"
+    lifecycle = PACK_LIFECYCLE_REGISTRY.new_lifecycle(pack_id, PACK_TTL_SECONDS)
+    assert lifecycle.created_at is not None
+    assert lifecycle.expires_at is not None
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -584,6 +588,9 @@ def build_pack(
         asset_status, asset_detail = summarize_asset_step(
             GeneratePackResponse(
                 pack_id=pack_id,
+                status="completed",
+                created_at=lifecycle.created_at,
+                expires_at=lifecycle.expires_at,
                 title=payload.title,
                 description=payload.description,
                 row_labels=payload.row_labels,
@@ -623,6 +630,8 @@ def build_pack(
         write_manifest=True,
         enriched_assets=enriched_assets,
         extra_manifest={
+            "created_at": lifecycle.created_at,
+            "expires_at": lifecycle.expires_at,
             "description": payload.description,
             "row_labels": payload.row_labels,
             "enrichment": {
@@ -679,6 +688,9 @@ def build_pack(
 
     return GeneratePackResponse(
         pack_id=pack_id,
+        status="completed",
+        created_at=lifecycle.created_at,
+        expires_at=lifecycle.expires_at,
         title=manifest.title,
         description=payload.description,
         row_labels=payload.row_labels,
@@ -831,35 +843,63 @@ def get_generation_job(job_id: str) -> JobResponse:
     )
 
 
+@app.get("/packs/{pack_id}/status", response_model=PackLifecycleResponse)
+def get_pack_status(pack_id: str) -> PackLifecycleResponse:
+    lifecycle = resolve_pack_lifecycle(pack_id)
+    return PackLifecycleResponse(
+        pack_id=lifecycle.pack_id,
+        status=lifecycle.status,
+        created_at=lifecycle.created_at,
+        expires_at=lifecycle.expires_at,
+    )
+
+
+def raise_missing_pack_artifact(
+    lifecycle: PackLifecycle,
+    *,
+    resource: str,
+) -> None:
+    lost = PackLifecycle(
+        pack_id=lifecycle.pack_id,
+        status="lost",
+        created_at=lifecycle.created_at,
+        expires_at=lifecycle.expires_at,
+    )
+    raise HTTPException(
+        status_code=404,
+        detail=lifecycle_error_detail(lost, resource=resource),
+    )
+
+
 @app.get("/packs/{pack_id}/files/{filename}")
 def get_pack_file(pack_id: str, filename: str) -> FileResponse:
-    cleanup_expired_storage()
+    resource = "manifest" if filename == "manifest.json" else "image"
+    lifecycle = require_available_pack(pack_id, resource=resource)
+    if Path(filename).name != filename:
+        raise_missing_pack_artifact(lifecycle, resource=resource)
     path = STORAGE_DIR / pack_id / filename
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="File not found.")
+        raise_missing_pack_artifact(lifecycle, resource=resource)
     return FileResponse(path)
 
 
 @app.get("/packs/{pack_id}/zip")
 def get_pack_zip(pack_id: str) -> FileResponse:
-    cleanup_expired_storage()
+    lifecycle = require_available_pack(pack_id, resource="zip")
     path = STORAGE_DIR / f"{pack_id}.zip"
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="ZIP not found.")
+        raise_missing_pack_artifact(lifecycle, resource="zip")
     return FileResponse(path, filename=f"tierzo-{pack_id}.zip")
 
 
 @app.get("/packs/{pack_id}/tiermaker-extension.json", response_model=TierMakerExtensionPayload)
 def get_tiermaker_extension_payload(pack_id: str, request: Request) -> TierMakerExtensionPayload:
-    cleanup_expired_storage()
+    lifecycle = require_available_pack(pack_id, resource="extension")
     pack_dir = STORAGE_DIR / pack_id
     manifest_path = pack_dir / "manifest.json"
-    zip_path = STORAGE_DIR / f"{pack_id}.zip"
 
     if not manifest_path.exists() or not pack_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Pack not found.")
-
-    import json
+        raise_missing_pack_artifact(lifecycle, resource="extension")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     base_url = str(request.base_url).rstrip("/")

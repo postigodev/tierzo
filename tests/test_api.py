@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 import sys
+import tempfile
 import unittest
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
 
@@ -12,11 +16,195 @@ from PIL import Image
 sys.path.append(str(Path("apps/api").resolve()))
 
 from tierzo_api.main import app  # noqa: E402
+from tierzo_api.lifecycle import PackLifecycleRegistry  # noqa: E402
+from tierzo_api import main as api_main  # noqa: E402
 from tierzo.agentic import IntakePlan  # noqa: E402
 from tierzo.enrichers import EnrichedAsset  # noqa: E402
 
 
 class TierzoApiTests(unittest.TestCase):
+    def create_text_pack(self, client: TestClient, title: str) -> dict[str, object]:
+        response = client.post(
+            "/packs",
+            json={
+                "text": "Mario\nLuigi",
+                "preset": "clean",
+                "size": 256,
+                "filename_mode": "both",
+                "title": title,
+                "enrichment_mode": "text",
+            },
+        )
+        self.assertEqual(response.status_code, 200)
+        return response.json()
+
+    def expire_manifest(self, pack_id: str) -> Path:
+        manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["created_at"] = "2025-01-01T00:00:00Z"
+        manifest["expires_at"] = "2025-01-01T01:00:00Z"
+        manifest_path.write_text(
+            json.dumps(manifest, indent=2, ensure_ascii=False) + "\n",
+            encoding="utf-8",
+        )
+        return manifest_path
+
+    def test_pack_status_is_completed_or_lost_with_utc_timestamps(self) -> None:
+        client = TestClient(app)
+        pack = self.create_text_pack(client, "Lifecycle completed")
+        pack_id = str(pack["pack_id"])
+        timestamp_pattern = re.compile(
+            r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z$"
+        )
+
+        self.assertEqual(pack["status"], "completed")
+        self.assertRegex(str(pack["created_at"]), timestamp_pattern)
+        self.assertRegex(str(pack["expires_at"]), timestamp_pattern)
+
+        manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
+        original_mtime_ns = manifest_path.stat().st_mtime_ns
+        status_response = client.get(f"/packs/{pack_id}/status")
+        lost_response = client.get("/packs/unknown-pack/status")
+
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(
+            status_response.json(),
+            {
+                "pack_id": pack_id,
+                "status": "completed",
+                "created_at": pack["created_at"],
+                "expires_at": pack["expires_at"],
+            },
+        )
+        self.assertEqual(manifest_path.stat().st_mtime_ns, original_mtime_ns)
+        self.assertEqual(lost_response.status_code, 200)
+        self.assertEqual(
+            lost_response.json(),
+            {
+                "pack_id": "unknown-pack",
+                "status": "lost",
+                "created_at": None,
+                "expires_at": None,
+            },
+        )
+
+    def test_expired_pack_status_and_artifacts_use_structured_gone_error(self) -> None:
+        client = TestClient(app)
+        pack = self.create_text_pack(client, "Lifecycle expired")
+        pack_id = str(pack["pack_id"])
+        self.expire_manifest(pack_id)
+
+        status_response = client.get(f"/packs/{pack_id}/status")
+        artifact_response = client.get(str(pack["zip_url"]))
+
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "expired")
+        self.assertEqual(status_response.json()["created_at"], "2025-01-01T00:00:00Z")
+        self.assertEqual(status_response.json()["expires_at"], "2025-01-01T01:00:00Z")
+        self.assertEqual(artifact_response.status_code, 410)
+        self.assertEqual(
+            artifact_response.json()["detail"],
+            {
+                "code": "pack_expired",
+                "resource": "zip",
+                "status": "expired",
+                "pack_id": pack_id,
+                "created_at": "2025-01-01T00:00:00Z",
+                "expires_at": "2025-01-01T01:00:00Z",
+            },
+        )
+
+    def test_required_artifact_loss_is_structured_and_shared_by_all_routes(self) -> None:
+        client = TestClient(app)
+        pack = self.create_text_pack(client, "Lifecycle lost")
+        pack_id = str(pack["pack_id"])
+        first_item = pack["items"][0]
+        image_path = api_main.STORAGE_DIR / pack_id / str(first_item["filename"])
+        image_path.unlink()
+
+        responses = {
+            "manifest": client.get(str(pack["manifest_url"])),
+            "image": client.get(str(first_item["image_url"])),
+            "zip": client.get(str(pack["zip_url"])),
+            "extension": client.get(str(pack["extension_url"])),
+        }
+
+        for resource, response in responses.items():
+            self.assertEqual(response.status_code, 404)
+            detail = response.json()["detail"]
+            self.assertEqual(detail["code"], "pack_lost")
+            self.assertEqual(detail["resource"], resource)
+            self.assertEqual(detail["status"], "lost")
+            self.assertEqual(detail["pack_id"], pack_id)
+            self.assertEqual(detail["created_at"], pack["created_at"])
+            self.assertEqual(detail["expires_at"], pack["expires_at"])
+
+    def test_expired_manifest_survives_registry_restart_as_evidence(self) -> None:
+        client = TestClient(app)
+        pack = self.create_text_pack(client, "Lifecycle restart")
+        pack_id = str(pack["pack_id"])
+        self.expire_manifest(pack_id)
+
+        restarted_registry = PackLifecycleRegistry(api_main.STORAGE_DIR)
+        lifecycle = restarted_registry.resolve(pack_id)
+
+        self.assertEqual(lifecycle.status, "expired")
+        self.assertEqual(lifecycle.created_at, "2025-01-01T00:00:00Z")
+        self.assertEqual(lifecycle.expires_at, "2025-01-01T01:00:00Z")
+
+    def test_malformed_lifecycle_metadata_is_lost_not_expired(self) -> None:
+        client = TestClient(app)
+        pack = self.create_text_pack(client, "Lifecycle malformed")
+        pack_id = str(pack["pack_id"])
+        manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["expires_at"] = "yesterday"
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        status_response = client.get(f"/packs/{pack_id}/status")
+
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "lost")
+        self.assertIsNone(status_response.json()["created_at"])
+        self.assertIsNone(status_response.json()["expires_at"])
+
+    def test_pack_tombstones_are_capacity_and_time_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            storage_dir = Path(temporary_directory)
+            now = datetime(2026, 1, 1, tzinfo=UTC)
+            current_time = [now]
+            registry = PackLifecycleRegistry(
+                storage_dir,
+                tombstone_capacity=1,
+                tombstone_retention_seconds=10,
+                clock=lambda: current_time[0],
+            )
+
+            def create_expired_pack(pack_id: str) -> None:
+                pack_dir = storage_dir / pack_id
+                pack_dir.mkdir()
+                (pack_dir / "001-item.png").write_bytes(b"image")
+                (storage_dir / f"{pack_id}.zip").write_bytes(b"zip")
+                (pack_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "created_at": "2025-01-01T00:00:00Z",
+                            "expires_at": "2025-01-01T01:00:00Z",
+                            "items": [{"filename": "001-item.png"}],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            create_expired_pack("first")
+            create_expired_pack("second")
+            self.assertEqual(registry.resolve("first").status, "expired")
+            self.assertEqual(registry.resolve("second").status, "expired")
+            self.assertEqual(registry.resolve("first").status, "lost")
+
+            current_time[0] = now + timedelta(seconds=11)
+            self.assertEqual(registry.resolve("second").status, "lost")
+
     def test_create_pack_from_text(self) -> None:
         client = TestClient(app)
 

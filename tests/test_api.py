@@ -3,9 +3,11 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import sys
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import patch
@@ -36,7 +38,15 @@ class TierzoApiTests(unittest.TestCase):
             },
         )
         self.assertEqual(response.status_code, 200)
-        return response.json()
+        pack = response.json()
+        pack_id = str(pack["pack_id"])
+
+        def remove_pack_artifacts() -> None:
+            shutil.rmtree(api_main.STORAGE_DIR / pack_id, ignore_errors=True)
+            (api_main.STORAGE_DIR / f"{pack_id}.zip").unlink(missing_ok=True)
+
+        self.addCleanup(remove_pack_artifacts)
+        return pack
 
     def expire_manifest(self, pack_id: str) -> Path:
         manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
@@ -92,7 +102,13 @@ class TierzoApiTests(unittest.TestCase):
         client = TestClient(app)
         pack = self.create_text_pack(client, "Lifecycle expired")
         pack_id = str(pack["pack_id"])
-        self.expire_manifest(pack_id)
+        manifest_path = self.expire_manifest(pack_id)
+        pack_dir = api_main.STORAGE_DIR / pack_id
+        zip_path = api_main.STORAGE_DIR / f"{pack_id}.zip"
+        manifest_before = manifest_path.read_bytes()
+        manifest_mtime_before = manifest_path.stat().st_mtime_ns
+        zip_before = zip_path.read_bytes()
+        directory_before = sorted(path.name for path in pack_dir.iterdir())
 
         status_response = client.get(f"/packs/{pack_id}/status")
         artifact_response = client.get(str(pack["zip_url"]))
@@ -113,6 +129,31 @@ class TierzoApiTests(unittest.TestCase):
                 "expires_at": "2025-01-01T01:00:00Z",
             },
         )
+        self.assertTrue(pack_dir.is_dir())
+        self.assertTrue(zip_path.is_file())
+        self.assertEqual(manifest_path.read_bytes(), manifest_before)
+        self.assertEqual(manifest_path.stat().st_mtime_ns, manifest_mtime_before)
+        self.assertEqual(zip_path.read_bytes(), zip_before)
+        self.assertEqual(
+            sorted(path.name for path in pack_dir.iterdir()),
+            directory_before,
+        )
+
+    def test_cleanup_deletes_expired_artifacts_and_retains_tombstone(self) -> None:
+        client = TestClient(app)
+        pack = self.create_text_pack(client, "Lifecycle cleanup")
+        pack_id = str(pack["pack_id"])
+        self.expire_manifest(pack_id)
+        pack_dir = api_main.STORAGE_DIR / pack_id
+        zip_path = api_main.STORAGE_DIR / f"{pack_id}.zip"
+
+        api_main.cleanup_expired_storage()
+
+        self.assertFalse(pack_dir.exists())
+        self.assertFalse(zip_path.exists())
+        status_response = client.get(f"/packs/{pack_id}/status")
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "expired")
 
     def test_required_artifact_loss_is_structured_and_shared_by_all_routes(self) -> None:
         client = TestClient(app)
@@ -168,8 +209,126 @@ class TierzoApiTests(unittest.TestCase):
         self.assertIsNone(status_response.json()["created_at"])
         self.assertIsNone(status_response.json()["expires_at"])
 
+    def test_structurally_malformed_manifests_are_lost(self) -> None:
+        tierzo_test_dir = api_main.ROOT_DIR / ".tierzo"
+        tierzo_test_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tierzo_test_dir) as temporary_directory:
+            storage_dir = Path(temporary_directory)
+            now = datetime(2026, 1, 1, tzinfo=UTC)
+            registry = PackLifecycleRegistry(storage_dir, clock=lambda: now)
+            valid_manifest = {
+                "title": "Valid",
+                "created_at": "2025-12-31T23:00:00Z",
+                "expires_at": "2026-01-01T01:00:00Z",
+                "items": [
+                    {
+                        "id": "item-1",
+                        "name": "Item",
+                        "filename": "001-item.png",
+                    }
+                ],
+            }
+
+            mutations = {
+                "missing-title": lambda manifest: manifest.pop("title"),
+                "items-not-list": lambda manifest: manifest.update(items={}),
+                "missing-id": lambda manifest: manifest["items"][0].pop("id"),
+                "missing-name": lambda manifest: manifest["items"][0].pop("name"),
+                "missing-filename": lambda manifest: manifest["items"][0].pop(
+                    "filename"
+                ),
+                "unsafe-filename": lambda manifest: manifest["items"][0].update(
+                    filename="../escape.png"
+                ),
+            }
+
+            for pack_id, mutate in mutations.items():
+                manifest = json.loads(json.dumps(valid_manifest))
+                mutate(manifest)
+                pack_dir = storage_dir / pack_id
+                pack_dir.mkdir()
+                (pack_dir / "001-item.png").write_bytes(b"image")
+                (storage_dir / f"{pack_id}.zip").write_bytes(b"zip")
+                (pack_dir / "manifest.json").write_text(
+                    json.dumps(manifest),
+                    encoding="utf-8",
+                )
+
+                with self.subTest(pack_id=pack_id):
+                    self.assertEqual(registry.resolve(pack_id).status, "lost")
+
+    def test_malformed_manifest_never_reaches_extension_rendering(self) -> None:
+        client = TestClient(app, raise_server_exceptions=False)
+        pack = self.create_text_pack(client, "Lifecycle invalid extension")
+        pack_id = str(pack["pack_id"])
+        manifest_path = api_main.STORAGE_DIR / pack_id / "manifest.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["items"][0].pop("name")
+        manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+        status_response = client.get(f"/packs/{pack_id}/status")
+        extension_response = client.get(str(pack["extension_url"]))
+
+        self.assertEqual(status_response.status_code, 200)
+        self.assertEqual(status_response.json()["status"], "lost")
+        self.assertEqual(extension_response.status_code, 404)
+        self.assertEqual(extension_response.json()["detail"]["code"], "pack_lost")
+
+    def test_concurrent_cleanup_and_resolution_keep_tombstones_bounded(self) -> None:
+        tierzo_test_dir = api_main.ROOT_DIR / ".tierzo"
+        tierzo_test_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tierzo_test_dir) as temporary_directory:
+            storage_dir = Path(temporary_directory)
+            registry = PackLifecycleRegistry(
+                storage_dir,
+                tombstone_capacity=4,
+                tombstone_retention_seconds=60,
+            )
+            pack_ids = [f"expired-{index}" for index in range(12)]
+            for pack_id in pack_ids:
+                pack_dir = storage_dir / pack_id
+                pack_dir.mkdir()
+                (pack_dir / "001-item.png").write_bytes(b"image")
+                (storage_dir / f"{pack_id}.zip").write_bytes(b"zip")
+                (pack_dir / "manifest.json").write_text(
+                    json.dumps(
+                        {
+                            "title": "Expired",
+                            "created_at": "2025-01-01T00:00:00Z",
+                            "expires_at": "2025-01-01T01:00:00Z",
+                            "items": [
+                                {
+                                    "id": "item",
+                                    "name": "Item",
+                                    "filename": "001-item.png",
+                                }
+                            ],
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+
+            with ThreadPoolExecutor(max_workers=8) as executor:
+                futures = [
+                    executor.submit(registry.cleanup_expired)
+                    for _ in range(8)
+                ] + [
+                    executor.submit(registry.resolve, pack_id)
+                    for pack_id in pack_ids
+                ]
+                for future in futures:
+                    future.result()
+
+            expired_count = sum(
+                registry.resolve(pack_id).status == "expired"
+                for pack_id in pack_ids
+            )
+            self.assertLessEqual(expired_count, 4)
+
     def test_pack_tombstones_are_capacity_and_time_bounded(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary_directory:
+        tierzo_test_dir = api_main.ROOT_DIR / ".tierzo"
+        tierzo_test_dir.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=tierzo_test_dir) as temporary_directory:
             storage_dir = Path(temporary_directory)
             now = datetime(2026, 1, 1, tzinfo=UTC)
             current_time = [now]
@@ -200,7 +359,12 @@ class TierzoApiTests(unittest.TestCase):
             create_expired_pack("second")
             self.assertEqual(registry.resolve("first").status, "expired")
             self.assertEqual(registry.resolve("second").status, "expired")
+            self.assertTrue((storage_dir / "first").is_dir())
+            self.assertTrue((storage_dir / "second").is_dir())
+
+            registry.cleanup_expired()
             self.assertEqual(registry.resolve("first").status, "lost")
+            self.assertEqual(registry.resolve("second").status, "expired")
 
             current_time[0] = now + timedelta(seconds=11)
             self.assertEqual(registry.resolve("second").status, "lost")

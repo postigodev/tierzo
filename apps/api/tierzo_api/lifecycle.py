@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from collections import OrderedDict
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -15,6 +16,7 @@ from fastapi import HTTPException
 
 PackStatus = Literal["completed", "expired", "lost"]
 _SAFE_PACK_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]*$")
+_SAFE_FILENAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]*$")
 _UTC_TIMESTAMP = re.compile(
     r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$"
 )
@@ -55,6 +57,7 @@ class PackLifecycleRegistry:
         self.tombstone_retention_seconds = max(0.0, tombstone_retention_seconds)
         self._clock = clock or (lambda: datetime.now(UTC))
         self._tombstones: OrderedDict[str, _Tombstone] = OrderedDict()
+        self._lock = threading.RLock()
 
     def new_lifecycle(self, pack_id: str, ttl_seconds: float) -> PackLifecycle:
         now = self._now()
@@ -67,10 +70,16 @@ class PackLifecycleRegistry:
 
     def resolve(self, pack_id: str) -> PackLifecycle:
         now = self._now()
-        self._evict_tombstones(now)
+        with self._lock:
+            return self._resolve_locked(pack_id, now)
 
+    def _resolve_locked(self, pack_id: str, now: datetime) -> PackLifecycle:
         tombstone = self._tombstones.get(pack_id)
-        if tombstone is not None:
+        if (
+            tombstone is not None
+            and (now - tombstone.retained_at).total_seconds()
+            < self.tombstone_retention_seconds
+        ):
             return tombstone.lifecycle
 
         if not _SAFE_PACK_ID.fullmatch(pack_id):
@@ -91,8 +100,6 @@ class PackLifecycleRegistry:
                 created_at=created_at,
                 expires_at=expires_at,
             )
-            self._delete_artifacts(pack_id)
-            self._remember_expired(lifecycle, now)
             return lifecycle
 
         lifecycle = PackLifecycle(
@@ -112,12 +119,21 @@ class PackLifecycleRegistry:
 
     def cleanup_expired(self) -> None:
         now = self._now()
-        self._evict_tombstones(now)
-        if not self.storage_dir.is_dir():
-            return
-        for child in self.storage_dir.iterdir():
-            if child.is_dir() and _SAFE_PACK_ID.fullmatch(child.name):
-                self.resolve(child.name)
+        with self._lock:
+            self._evict_tombstones(now)
+            if not self.storage_dir.is_dir():
+                return
+            pack_ids = [
+                child.name
+                for child in self.storage_dir.iterdir()
+                if child.is_dir() and _SAFE_PACK_ID.fullmatch(child.name)
+            ]
+            for pack_id in pack_ids:
+                lifecycle = self._resolve_locked(pack_id, now)
+                if lifecycle.status != "expired":
+                    continue
+                self._delete_artifacts(pack_id)
+                self._remember_expired(lifecycle, now)
 
     def _now(self) -> datetime:
         now = self._clock()
@@ -176,24 +192,50 @@ class PackLifecycleRegistry:
     ) -> bool:
         if not pack_dir.is_dir() or manifest is None:
             return False
+        title = manifest.get("title")
+        if not isinstance(title, str) or not title:
+            return False
         zip_path = self.storage_dir / f"{pack_id}.zip"
         if not zip_path.is_file():
             return False
         items = manifest.get("items")
         if not isinstance(items, list):
             return False
+        item_ids: set[str] = set()
+        filenames: set[str] = set()
         for item in items:
             if not isinstance(item, dict):
                 return False
+            item_id = item.get("id")
+            name = item.get("name")
             filename = item.get("filename")
             if (
-                not isinstance(filename, str)
+                not isinstance(item_id, str)
+                or not item_id
+                or item_id in item_ids
+                or not isinstance(name, str)
+                or not name
+                or not isinstance(filename, str)
                 or not filename
-                or Path(filename).name != filename
+                or filename in filenames
+                or not self._is_safe_filename(filename)
                 or not (pack_dir / filename).is_file()
             ):
                 return False
+            item_ids.add(item_id)
+            filenames.add(filename)
         return True
+
+    @staticmethod
+    def _is_safe_filename(filename: str) -> bool:
+        return (
+            _SAFE_FILENAME.fullmatch(filename) is not None
+            and filename not in {".", ".."}
+            and "/" not in filename
+            and "\\" not in filename
+            and Path(filename).name == filename
+            and not Path(filename).is_absolute()
+        )
 
     def _delete_artifacts(self, pack_id: str) -> None:
         pack_dir = (self.storage_dir / pack_id).resolve()
@@ -214,25 +256,30 @@ class PackLifecycleRegistry:
         lifecycle: PackLifecycle,
         retained_at: datetime,
     ) -> None:
-        if self.tombstone_capacity == 0 or self.tombstone_retention_seconds == 0:
-            return
-        self._tombstones[lifecycle.pack_id] = _Tombstone(
-            lifecycle=lifecycle,
-            retained_at=retained_at,
-        )
-        self._tombstones.move_to_end(lifecycle.pack_id)
-        while len(self._tombstones) > self.tombstone_capacity:
-            self._tombstones.popitem(last=False)
+        with self._lock:
+            if (
+                self.tombstone_capacity == 0
+                or self.tombstone_retention_seconds == 0
+            ):
+                return
+            self._tombstones[lifecycle.pack_id] = _Tombstone(
+                lifecycle=lifecycle,
+                retained_at=retained_at,
+            )
+            self._tombstones.move_to_end(lifecycle.pack_id)
+            while len(self._tombstones) > self.tombstone_capacity:
+                self._tombstones.popitem(last=False)
 
     def _evict_tombstones(self, now: datetime) -> None:
-        expired_ids = [
-            pack_id
-            for pack_id, tombstone in self._tombstones.items()
-            if (now - tombstone.retained_at).total_seconds()
-            >= self.tombstone_retention_seconds
-        ]
-        for pack_id in expired_ids:
-            self._tombstones.pop(pack_id, None)
+        with self._lock:
+            expired_ids = [
+                pack_id
+                for pack_id, tombstone in self._tombstones.items()
+                if (now - tombstone.retained_at).total_seconds()
+                >= self.tombstone_retention_seconds
+            ]
+            for pack_id in expired_ids:
+                self._tombstones.pop(pack_id, None)
 
 
 ROOT_DIR = Path(__file__).resolve().parents[3]

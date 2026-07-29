@@ -19,6 +19,9 @@ export type SourceItem = {
 
 export type PackResponse = {
   pack_id: string;
+  status: "completed";
+  created_at: string;
+  expires_at: string;
   title: string;
   description: string | null;
   row_labels: string[];
@@ -37,6 +40,14 @@ export type PackResponse = {
   } | null;
 };
 
+export type PersistedPackSnapshot = Omit<
+  PackResponse,
+  "created_at" | "expires_at"
+> & {
+  created_at: string | null;
+  expires_at: string | null;
+};
+
 export type JobStep = {
   id: string;
   label: string;
@@ -46,11 +57,40 @@ export type JobStep = {
 
 export type GenerationJob = {
   job_id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "lost";
+  created_at: string | null;
+  updated_at: string | null;
   steps: JobStep[];
   pack: PackResponse | null;
+  pack_status: PackLifecycleStatus | null;
   error: string | null;
 };
+
+export type PackLifecycleStatus = "completed" | "expired" | "lost";
+
+export type PackLifecycleResponse = {
+  pack_id: string;
+  status: PackLifecycleStatus;
+  created_at: string | null;
+  expires_at: string | null;
+};
+
+export type ArtifactState =
+  | "idle"
+  | "checking"
+  | "completed"
+  | "expired"
+  | "lost"
+  | "validation_unavailable";
+
+export type PollingState =
+  | "idle"
+  | "polling"
+  | "completed"
+  | "failed"
+  | "lost"
+  | "cancelled"
+  | "timed_out";
 
 export type ItemAssetOverride = {
   action: "text";
@@ -110,7 +150,8 @@ export type SavedWorkspaceState = {
   enrichmentMode: string;
   tiers: TierRow[];
   board: BoardState;
-  pack: PackResponse | null;
+  pack: PersistedPackSnapshot | null;
+  lastJobId: string | null;
   migrationWarnings: string[];
 };
 
@@ -125,7 +166,8 @@ export type LegacySavedDemoState = {
   enrichmentMode?: string;
   tiers?: TierRow[];
   board?: LegacyBoardState;
-  pack?: PackResponse | null;
+  pack?: PersistedPackSnapshot | null;
+  lastJobId?: string | null;
 };
 
 export type SavedDemoState = SavedWorkspaceState;

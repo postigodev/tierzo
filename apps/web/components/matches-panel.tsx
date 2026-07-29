@@ -10,7 +10,11 @@ import {
 
 import { apiUrl } from "../lib/api";
 import { formatMatchSource } from "../lib/formatters";
-import type { MatchOverrides, PackResponse } from "../lib/types";
+import type {
+  MatchOverrides,
+  PackItem,
+  PersistedPackSnapshot,
+} from "../lib/types";
 
 type MatchStatus = {
   label: string;
@@ -22,7 +26,7 @@ function getMatchStatus({
   item,
   isForcedText,
 }: {
-  item: PackResponse["items"][number];
+  item: PackItem;
   isForcedText: boolean;
 }): MatchStatus {
   if (isForcedText) {
@@ -86,7 +90,7 @@ export function MatchesPanel({
     action: "keep" | "text",
   ) => void;
   overrides: MatchOverrides;
-  pack: PackResponse;
+  pack: PersistedPackSnapshot;
 }) {
   const matched = pack.items.filter((item) => item.asset_kind !== "text-card");
   const fallback = pack.items.length - matched.length;

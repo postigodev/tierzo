@@ -7,9 +7,17 @@ const context = await browser.newContext({
   acceptDownloads: true,
   viewport: { width: 1440, height: 1000 },
 });
-await context.addInitScript(() => window.localStorage.clear());
+await context.addInitScript(() => {
+  if (!window.sessionStorage.getItem("tierzo.demo.verify.initialized")) {
+    window.localStorage.clear();
+    window.sessionStorage.setItem("tierzo.demo.verify.initialized", "true");
+  }
+});
 const page = await context.newPage();
 const consoleMessages = [];
+const workspaceStorageKey = "tierzo.editor.v3";
+const utcTimestampPattern =
+  /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,6})?Z$/;
 
 page.on("console", (message) => {
   consoleMessages.push(`${message.type()}: ${message.text()}`);
@@ -51,9 +59,43 @@ async function dragItemToTier(itemId, tierIndex) {
   await dataTransfer.dispose();
 }
 
+async function readSavedWorkspace() {
+  return page.evaluate((key) => {
+    const saved = window.localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : null;
+  }, workspaceStorageKey);
+}
+
+function editableWorkspaceSnapshot(workspace) {
+  return {
+    sourceItems: workspace.sourceItems,
+    text: workspace.text,
+    title: workspace.title,
+    description: workspace.description,
+    preset: workspace.preset,
+    cardStyle: workspace.cardStyle,
+    enrichmentMode: workspace.enrichmentMode,
+    tiers: workspace.tiers,
+    board: workspace.board,
+    lastJobId: workspace.lastJobId,
+    migrationWarnings: workspace.migrationWarnings,
+  };
+}
+
+function assertEqual(actual, expected, message) {
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    throw new Error(
+      `${message}: ${JSON.stringify({ actual, expected }, null, 2)}`,
+    );
+  }
+}
+
 try {
   await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
   await page.getByLabel("Tier list title").fill("Identity regeneration");
+  await page
+    .getByLabel("Tier list description")
+    .fill("Lifecycle recovery smoke");
   await page.locator("textarea#items").fill("Alien\nAlien\nThe Thing");
   await page.getByLabel("Generate mode").selectOption("text");
   await page.getByLabel("Background").fill("#ff0000");
@@ -152,6 +194,149 @@ try {
     );
   }
 
+  await page
+    .getByRole("textbox", { name: "Tier 1 label" })
+    .fill("Top picks");
+  await page.waitForFunction(
+    ({ key, expectedLabel }) => {
+      const saved = window.localStorage.getItem(key);
+      if (!saved) return false;
+      const workspace = JSON.parse(saved);
+      return (
+        workspace.tiers?.[0]?.label === expectedLabel &&
+        workspace.pack?.pack_id &&
+        workspace.lastJobId &&
+        workspace.title === "Identity regeneration" &&
+        workspace.description === "Lifecycle recovery smoke"
+      );
+    },
+    { key: workspaceStorageKey, expectedLabel: "Top picks" },
+  );
+
+  const savedBeforeReload = await readSavedWorkspace();
+  const editableBeforeInvalidation =
+    editableWorkspaceSnapshot(savedBeforeReload);
+  const restoredPackId = savedBeforeReload.pack?.pack_id;
+  if (!restoredPackId || !savedBeforeReload.lastJobId) {
+    throw new Error("Expected persisted pack and job IDs before restoration.");
+  }
+
+  const statusRoute = `**/packs/${restoredPackId}/status`;
+  const completedStatusResponsePromise = page.waitForResponse(
+    (response) =>
+      response.url().endsWith(`/packs/${restoredPackId}/status`) &&
+      response.request().method() === "GET",
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  const completedStatusResponse = await completedStatusResponsePromise;
+  const completedStatusBody = await completedStatusResponse.json();
+  if (
+    completedStatusResponse.status() !== 200 ||
+    completedStatusBody.status !== "completed" ||
+    completedStatusBody.pack_id !== restoredPackId
+  ) {
+    throw new Error(
+      `Completed restore received an inconsistent real status response: ${JSON.stringify({
+        httpStatus: completedStatusResponse.status(),
+        body: completedStatusBody,
+      })}`,
+    );
+  }
+  // Artifact actions are asserted only after the real completed status above.
+  await page
+    .getByRole("link", { name: "Manifest", exact: true })
+    .waitFor({ state: "visible" });
+  if (
+    (await page.locator("textarea#items").inputValue()) !==
+    savedBeforeReload.text
+  ) {
+    throw new Error("Reload did not restore the source text.");
+  }
+  if (
+    (await page.getByRole("textbox", { name: "Tier 1 label" }).textContent()) !==
+    "Top picks"
+  ) {
+    throw new Error("Reload did not restore the edited tier label.");
+  }
+  const savedAfterCompletedRestore = await readSavedWorkspace();
+  if (savedAfterCompletedRestore.pack?.pack_id !== restoredPackId) {
+    throw new Error("A completed pack was not retained after reload.");
+  }
+
+  await page.route(statusRoute, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        pack_id: restoredPackId,
+        status: "lost",
+        created_at: null,
+        expires_at: null,
+      }),
+    });
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  await page
+    .getByText(
+      "This temporary pack is no longer available. Your editable workspace is preserved.",
+      { exact: true },
+    )
+    .waitFor();
+  await page.waitForFunction(
+    (key) =>
+      JSON.parse(window.localStorage.getItem(key) ?? "null")?.pack === null,
+    workspaceStorageKey,
+  );
+
+  if (
+    (await page.getByRole("link", { name: "Manifest", exact: true }).count()) ||
+    (await page.getByRole("link", { name: /extension json/i }).count()) ||
+    (await page.getByRole("link", { name: /download zip/i }).count())
+  ) {
+    throw new Error("Artifact actions remained enabled after typed pack loss.");
+  }
+  if (!(await page.getByRole("button", { name: /export png/i }).isDisabled())) {
+    throw new Error("PNG export remained enabled after typed pack loss.");
+  }
+
+  const savedAfterLoss = await readSavedWorkspace();
+  assertEqual(
+    editableWorkspaceSnapshot(savedAfterLoss),
+    editableBeforeInvalidation,
+    "Artifact invalidation changed editable workspace state",
+  );
+  const rankedIdsAfterLoss = Object.values(savedAfterLoss.board).flat();
+  if (
+    !rankedIdsAfterLoss.includes(initialIds[1]) ||
+    savedAfterLoss.text !== "The Thing\nAlien\nArrival" ||
+    savedAfterLoss.tiers[0]?.label !== "Top picks" ||
+    savedAfterLoss.cardStyle?.background !== "#ff0000" ||
+    savedAfterLoss.cardStyle?.textColor !== "#00ff00" ||
+    savedAfterLoss.description !== "Lifecycle recovery smoke" ||
+    savedAfterLoss.lastJobId !== savedBeforeReload.lastJobId
+  ) {
+    throw new Error(
+      `Lost restoration did not preserve workspace data: ${JSON.stringify(
+        savedAfterLoss,
+      )}`,
+    );
+  }
+
+  await page.unroute(statusRoute);
+  await generateAndWaitForNewManifest();
+  const savedAfterRegeneration = await readSavedWorkspace();
+  if (
+    !savedAfterRegeneration.pack ||
+    savedAfterRegeneration.pack.pack_id === restoredPackId
+  ) {
+    throw new Error("Real regeneration did not replace the lost pack.");
+  }
+  assertEqual(
+    savedAfterRegeneration.board,
+    editableBeforeInvalidation.board,
+    "Regeneration changed preserved rankings",
+  );
+
   const exportDownload = await Promise.all([
     page.waitForEvent("download"),
     page.getByRole("button", { name: /export png/i }).click(),
@@ -182,6 +367,55 @@ try {
   ) {
     throw new Error(`Manifest item identities are not unique: ${JSON.stringify(manifest.items)}`);
   }
+  const createdAtMs = Date.parse(manifest.created_at);
+  const expiresAtMs = Date.parse(manifest.expires_at);
+  if (
+    !utcTimestampPattern.test(manifest.created_at) ||
+    !utcTimestampPattern.test(manifest.expires_at) ||
+    !Number.isFinite(createdAtMs) ||
+    !Number.isFinite(expiresAtMs) ||
+    createdAtMs >= expiresAtMs
+  ) {
+    throw new Error(
+      `Manifest lifecycle timestamps are not ordered UTC Z values: ${JSON.stringify({
+        created_at: manifest.created_at,
+        expires_at: manifest.expires_at,
+      })}`,
+    );
+  }
+
+  const regeneratedPackId = savedAfterRegeneration.pack.pack_id;
+  const statusHref = `http://localhost:8000/packs/${regeneratedPackId}/status`;
+  const firstStatus = await fetch(statusHref).then((response) => response.json());
+  const secondStatus = await fetch(statusHref).then((response) => response.json());
+  if (
+    firstStatus.status !== "completed" ||
+    firstStatus.pack_id !== regeneratedPackId ||
+    firstStatus.created_at !== manifest.created_at ||
+    firstStatus.expires_at !== manifest.expires_at
+  ) {
+    throw new Error(
+      `Pack status disagrees with its manifest: ${JSON.stringify(firstStatus)}`,
+    );
+  }
+  assertEqual(
+    secondStatus,
+    firstStatus,
+    "Repeated status lookup renewed or changed pack lifecycle metadata",
+  );
+
+  const imageResponse = await fetch(
+    `http://localhost:8000${savedAfterRegeneration.pack.items[0].image_url}`,
+  );
+  const zipResponse = await fetch(zipHref);
+  if (!imageResponse.ok || !zipResponse.ok) {
+    throw new Error(
+      `Completed artifact access failed: ${JSON.stringify({
+        imageStatus: imageResponse.status,
+        zipStatus: zipResponse.status,
+      })}`,
+    );
+  }
 
   await page.screenshot({
     path: "../../.tierzo/demo-screenshot.png",
@@ -200,6 +434,13 @@ try {
         exportName: exportDownload.suggestedFilename(),
         manifestIds: manifest.items.map((item) => item.id),
         manifestFilenames: manifest.items.map((item) => item.filename),
+        lifecycle: {
+          restoredPackId,
+          regeneratedPackId,
+          status: firstStatus,
+          preservedLastJobId: savedAfterLoss.lastJobId,
+          preservedRankedIds: rankedIdsAfterLoss,
+        },
         zipHref,
         extensionHref,
         consoleMessages,

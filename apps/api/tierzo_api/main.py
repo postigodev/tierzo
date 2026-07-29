@@ -1,10 +1,13 @@
 from __future__ import annotations
 
-import shutil
-import time
-import uuid
+import json
 import os
+import shutil
+import threading
+import uuid
+from collections import OrderedDict
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -21,16 +24,27 @@ from tierzo.models import SourceItem, source_items_from_strings
 from tierzo.parsers import normalize_text, parse_text_lines
 from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
+from .environment import ROOT_DIR
+from .lifecycle import (
+    PACK_LIFECYCLE_REGISTRY,
+    STORAGE_DIR,
+    PackLifecycle,
+    lifecycle_error_detail,
+    require_available_pack,
+    resolve_pack_lifecycle,
+    utc_timestamp,
+)
 
-ROOT_DIR = Path(__file__).resolve().parents[3]
-STORAGE_DIR = Path(
-    os.getenv("TIERZO_STORAGE_DIR", ROOT_DIR / ".tierzo" / "storage")
-).resolve()
 AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
 PROMPT_DRAFT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "prompt-drafts"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 MAX_LIST_ITEMS = int(os.getenv("MAX_LIST_ITEMS", "200"))
 PACK_TTL_SECONDS = int(os.getenv("PACK_TTL_SECONDS", "3600"))
+JOB_ACTIVE_CAPACITY = int(os.getenv("JOB_ACTIVE_CAPACITY", "8"))
+JOB_TERMINAL_CAPACITY = int(os.getenv("JOB_TERMINAL_CAPACITY", "1024"))
+JOB_TERMINAL_RETENTION_SECONDS = float(
+    os.getenv("JOB_TERMINAL_RETENTION_SECONDS", "3600")
+)
 DEFAULT_FRONTEND_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:3000",
@@ -40,23 +54,6 @@ ALLOW_MANUAL_IMAGE_URLS = os.getenv("ALLOW_MANUAL_IMAGE_URLS", "false").lower() 
     "true",
     "yes",
 }
-
-def load_root_env() -> None:
-    env_path = ROOT_DIR / ".env"
-    if not env_path.exists():
-        return
-
-    for line in env_path.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#") or "=" not in stripped:
-            continue
-        key, value = stripped.split("=", 1)
-        normalized_key = key.strip()
-        if not os.environ.get(normalized_key):
-            os.environ[normalized_key] = value.strip().strip('"').strip("'")
-
-
-load_root_env()
 
 FONT_PATHS = {
     "default": None,
@@ -216,6 +213,9 @@ class PackItemResponse(BaseModel):
 
 class GeneratePackResponse(BaseModel):
     pack_id: str
+    status: Literal["completed"]
+    created_at: str
+    expires_at: str
     title: str
     description: str | None
     row_labels: list[str]
@@ -228,9 +228,16 @@ class GeneratePackResponse(BaseModel):
     agent_plan: dict[str, object] | None = None
 
 
+class PackLifecycleResponse(BaseModel):
+    pack_id: str
+    status: Literal["completed", "expired", "lost"]
+    created_at: str | None = None
+    expires_at: str | None = None
+
+
 class CreateJobResponse(BaseModel):
     job_id: str
-    status: str
+    status: Literal["pending"]
 
 
 class JobStepResponse(BaseModel):
@@ -242,19 +249,210 @@ class JobStepResponse(BaseModel):
 
 class JobResponse(BaseModel):
     job_id: str
-    status: str
+    status: Literal["pending", "running", "completed", "failed", "lost"]
+    created_at: str | None = None
+    updated_at: str | None = None
     steps: list[JobStepResponse]
     pack: GeneratePackResponse | None = None
+    pack_status: Literal["completed", "expired", "lost"] | None = None
     error: str | None = None
+
+
+JobStatus = Literal["pending", "running", "completed", "failed"]
+_ACTIVE_JOB_STATUSES = frozenset({"pending", "running"})
+_TERMINAL_JOB_STATUSES = frozenset({"completed", "failed"})
 
 
 @dataclass
 class JobRecord:
     job_id: str
-    status: str = "queued"
+    created_at: str
+    updated_at: str
+    status: JobStatus = "pending"
     steps: list[JobStepResponse] = field(default_factory=list)
     pack: GeneratePackResponse | None = None
     error: str | None = None
+    terminal_at: datetime | None = field(default=None, repr=False)
+
+
+class JobRegistry:
+    def __init__(
+        self,
+        *,
+        active_capacity: int = JOB_ACTIVE_CAPACITY,
+        terminal_capacity: int = JOB_TERMINAL_CAPACITY,
+        terminal_retention_seconds: float = JOB_TERMINAL_RETENTION_SECONDS,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self.active_capacity = max(0, active_capacity)
+        self.terminal_capacity = max(0, terminal_capacity)
+        self.terminal_retention_seconds = max(
+            0.0,
+            terminal_retention_seconds,
+        )
+        self._clock = clock or (lambda: datetime.now(UTC))
+        self._jobs: OrderedDict[str, JobRecord] = OrderedDict()
+        self._lock = threading.RLock()
+
+    def admit(
+        self,
+        job_id: str,
+        steps: list[JobStepResponse],
+    ) -> JobRecord | None:
+        now = self._now()
+        with self._lock:
+            self._cleanup_terminal(now)
+            active_count = sum(
+                job.status in _ACTIVE_JOB_STATUSES
+                for job in self._jobs.values()
+            )
+            if active_count >= self.active_capacity:
+                return None
+            if job_id in self._jobs:
+                raise ValueError(f"Job {job_id} already exists.")
+            timestamp = utc_timestamp(now)
+            job = JobRecord(
+                job_id=job_id,
+                created_at=timestamp,
+                updated_at=timestamp,
+                steps=[step.model_copy(deep=True) for step in steps],
+            )
+            self._jobs[job_id] = job
+            return self._snapshot(job)
+
+    def get(self, job_id: str) -> JobRecord | None:
+        now = self._now()
+        with self._lock:
+            self._cleanup_terminal(now)
+            job = self._jobs.get(job_id)
+            return self._snapshot(job) if job is not None else None
+
+    def mark_running(self, job_id: str) -> bool:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status != "pending":
+                return False
+            job.status = "running"
+            self._touch(job, now)
+            return True
+
+    def update_step(
+        self,
+        job_id: str,
+        step_id: str,
+        status: str,
+        detail: str | None = None,
+    ) -> None:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status not in _ACTIVE_JOB_STATUSES:
+                return
+            job.steps = [
+                step.model_copy(update={"status": status, "detail": detail})
+                if step.id == step_id
+                else step
+                for step in job.steps
+            ]
+            self._touch(job, now)
+
+    def step_status(self, job_id: str, step_id: str) -> str | None:
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None:
+                return None
+            return next(
+                (step.status for step in job.steps if step.id == step_id),
+                None,
+            )
+
+    def complete(
+        self,
+        job_id: str,
+        pack: GeneratePackResponse,
+    ) -> None:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status not in _ACTIVE_JOB_STATUSES:
+                return
+            job.pack = pack
+            job.status = "completed"
+            job.terminal_at = now
+            self._touch(job, now)
+            self._jobs.move_to_end(job_id)
+            self._cleanup_terminal(now)
+
+    def mark_failed(
+        self,
+        job_id: str,
+        error: str,
+        step_detail: str | None = None,
+    ) -> None:
+        now = self._now()
+        with self._lock:
+            job = self._jobs.get(job_id)
+            if job is None or job.status not in _ACTIVE_JOB_STATUSES:
+                return
+            job.status = "failed"
+            job.error = error
+            for index, step in enumerate(job.steps):
+                if step.status in {"pending", "running"}:
+                    job.steps[index] = step.model_copy(
+                        update={"status": "error", "detail": step_detail}
+                    )
+                    break
+            job.terminal_at = now
+            self._touch(job, now)
+            self._jobs.move_to_end(job_id)
+            self._cleanup_terminal(now)
+
+    def _cleanup_terminal(self, now: datetime) -> None:
+        expired_ids = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if (
+                job.status in _TERMINAL_JOB_STATUSES
+                and job.terminal_at is not None
+                and (now - job.terminal_at).total_seconds()
+                >= self.terminal_retention_seconds
+            )
+        ]
+        for job_id in expired_ids:
+            self._jobs.pop(job_id, None)
+
+        terminal_ids = [
+            job_id
+            for job_id, job in self._jobs.items()
+            if job.status in _TERMINAL_JOB_STATUSES
+        ]
+        excess_count = max(0, len(terminal_ids) - self.terminal_capacity)
+        for job_id in terminal_ids[:excess_count]:
+            self._jobs.pop(job_id, None)
+
+    def _now(self) -> datetime:
+        now = self._clock()
+        if now.tzinfo is None:
+            now = now.replace(tzinfo=UTC)
+        return now.astimezone(UTC)
+
+    @staticmethod
+    def _touch(job: JobRecord, now: datetime) -> None:
+        job.updated_at = utc_timestamp(now)
+
+    @staticmethod
+    def _snapshot(job: JobRecord) -> JobRecord:
+        return JobRecord(
+            job_id=job.job_id,
+            created_at=job.created_at,
+            updated_at=job.updated_at,
+            status=job.status,
+            steps=[step.model_copy(deep=True) for step in job.steps],
+            pack=job.pack.model_copy(deep=True) if job.pack is not None else None,
+            error=job.error,
+            terminal_at=job.terminal_at,
+        )
 
 
 class TierMakerImagePayload(BaseModel):
@@ -301,21 +499,7 @@ def allowed_cors_origins() -> list[str]:
 
 
 def cleanup_expired_storage() -> None:
-    if not STORAGE_DIR.exists():
-        return
-    cutoff = time.time() - PACK_TTL_SECONDS
-    for child in STORAGE_DIR.iterdir():
-        try:
-            if child.is_dir():
-                modified = child.stat().st_mtime
-                if modified < cutoff:
-                    shutil.rmtree(child)
-            elif child.is_file() and child.suffix == ".zip":
-                modified = child.stat().st_mtime
-                if modified < cutoff:
-                    child.unlink()
-        except Exception:
-            continue
+    PACK_LIFECYCLE_REGISTRY.cleanup_expired()
 
 
 app = FastAPI(title="Tierzo API", version="0.1.0")
@@ -335,7 +519,7 @@ def on_startup() -> None:
     cleanup_expired_storage()
 
 
-JOBS: dict[str, JobRecord] = {}
+JOBS = JobRegistry()
 
 
 @app.get("/health")
@@ -402,17 +586,12 @@ def default_job_steps() -> list[JobStepResponse]:
 
 
 def update_job_step(
-    job: JobRecord,
+    job_id: str,
     step_id: str,
     status: str,
     detail: str | None = None,
 ) -> None:
-    job.steps = [
-        step.model_copy(update={"status": status, "detail": detail})
-        if step.id == step_id
-        else step
-        for step in job.steps
-    ]
+    JOBS.update_step(job_id, step_id, status, detail)
 
 
 def summarize_asset_step(pack: GeneratePackResponse) -> tuple[str, str | None]:
@@ -458,6 +637,23 @@ def source_items_from_payload(payload: GeneratePackRequest) -> tuple[list[Source
 def build_pack(
     payload: GeneratePackRequest,
     progress_callback: ProgressCallback | None = None,
+) -> GeneratePackResponse:
+    allocated_pack_ids: list[str] = []
+    try:
+        return _build_pack(payload, progress_callback, allocated_pack_ids)
+    except Exception:
+        for pack_id in allocated_pack_ids:
+            try:
+                PACK_LIFECYCLE_REGISTRY.discard(pack_id)
+            except Exception:
+                pass
+        raise
+
+
+def _build_pack(
+    payload: GeneratePackRequest,
+    progress_callback: ProgressCallback | None,
+    allocated_pack_ids: list[str],
 ) -> GeneratePackResponse:
     agent_plan: IntakePlan | None = None
     enrichment_mode = payload.enrichment_mode
@@ -525,8 +721,12 @@ def build_pack(
         )
 
     pack_id = uuid.uuid4().hex
+    allocated_pack_ids.append(pack_id)
     output_dir = STORAGE_DIR / pack_id
     zip_path = STORAGE_DIR / f"{pack_id}.zip"
+    lifecycle = PACK_LIFECYCLE_REGISTRY.new_lifecycle(pack_id, PACK_TTL_SECONDS)
+    assert lifecycle.created_at is not None
+    assert lifecycle.expires_at is not None
 
     if output_dir.exists():
         shutil.rmtree(output_dir)
@@ -584,6 +784,9 @@ def build_pack(
         asset_status, asset_detail = summarize_asset_step(
             GeneratePackResponse(
                 pack_id=pack_id,
+                status="completed",
+                created_at=lifecycle.created_at,
+                expires_at=lifecycle.expires_at,
                 title=payload.title,
                 description=payload.description,
                 row_labels=payload.row_labels,
@@ -623,6 +826,8 @@ def build_pack(
         write_manifest=True,
         enriched_assets=enriched_assets,
         extra_manifest={
+            "created_at": lifecycle.created_at,
+            "expires_at": lifecycle.expires_at,
             "description": payload.description,
             "row_labels": payload.row_labels,
             "enrichment": {
@@ -679,6 +884,9 @@ def build_pack(
 
     return GeneratePackResponse(
         pack_id=pack_id,
+        status="completed",
+        created_at=lifecycle.created_at,
+        expires_at=lifecycle.expires_at,
         title=manifest.title,
         description=payload.description,
         row_labels=payload.row_labels,
@@ -732,70 +940,63 @@ def create_pack(payload: GeneratePackRequest) -> GeneratePackResponse:
 
 
 def run_generation_job(job_id: str, payload: GeneratePackRequest) -> None:
-    job = JOBS[job_id]
-    job.status = "running"
-    update_job_step(job, "read", "running")
+    if not JOBS.mark_running(job_id):
+        return
+    update_job_step(job_id, "read", "running")
 
     try:
         source_items, _ = source_items_from_payload(payload)
         if not source_items:
             raise HTTPException(status_code=400, detail="No non-empty items found.")
 
-        update_job_step(job, "read", "done", f"Found {len(source_items)} source items.")
-        update_job_step(job, "plan", "running")
+        update_job_step(job_id, "read", "done", f"Found {len(source_items)} source items.")
+        update_job_step(job_id, "plan", "running")
 
         if payload.enrichment_mode != "auto":
-            update_job_step(job, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
+            update_job_step(job_id, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
 
         def on_progress(event: str, detail: str | None) -> None:
             if event == "plan_done":
-                update_job_step(job, "plan", "done", detail)
+                update_job_step(job_id, "plan", "done", detail)
             elif event == "assets_running":
-                update_job_step(job, "assets", "running", detail)
+                update_job_step(job_id, "assets", "running", detail)
             elif event == "assets_done":
-                update_job_step(job, "assets", "done", detail)
+                update_job_step(job_id, "assets", "done", detail)
             elif event == "assets_warning":
-                update_job_step(job, "assets", "warning", detail)
+                update_job_step(job_id, "assets", "warning", detail)
             elif event == "render_running":
-                update_job_step(job, "render", "running", detail)
+                update_job_step(job_id, "render", "running", detail)
             elif event == "render_done":
-                update_job_step(job, "render", "done", detail)
+                update_job_step(job_id, "render", "done", detail)
             elif event == "export_running":
-                update_job_step(job, "export", "running", detail)
+                update_job_step(job_id, "export", "running", detail)
             elif event == "export_done":
-                update_job_step(job, "export", "done", detail)
+                update_job_step(job_id, "export", "done", detail)
 
         pack = build_pack(payload, progress_callback=on_progress)
 
         if pack.agent_plan:
-            if next(step for step in job.steps if step.id == "plan").status != "done":
+            if JOBS.step_status(job_id, "plan") != "done":
                 source = "cache" if pack.agent_plan.get("cache_hit") else pack.agent_plan.get("source", "agent")
                 update_job_step(
-                    job,
+                    job_id,
                     "plan",
                     "done",
                     f"Picked {pack.agent_plan.get('domain')} via {source}.",
                 )
         else:
-            if next(step for step in job.steps if step.id == "plan").status != "done":
-                update_job_step(job, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
+            if JOBS.step_status(job_id, "plan") != "done":
+                update_job_step(job_id, "plan", "done", f"Using {format_tool_for_step(payload.enrichment_mode)}.")
 
-        job.pack = pack
-        job.status = "completed"
+        JOBS.complete(job_id, pack)
     except HTTPException as exc:
-        job.status = "failed"
-        job.error = str(exc.detail)
-        for step in job.steps:
-            if step.status in {"pending", "running"}:
-                update_job_step(job, step.id, "error")
-                break
+        JOBS.mark_failed(job_id, str(exc.detail))
     except Exception as exc:
-        job.status = "failed"
-        job.error = "Tierzo could not generate this pack."
-        for step in job.steps:
-            if step.status in {"pending", "running"}:
-                update_job_step(job, step.id, "error", str(exc))
-                break
+        JOBS.mark_failed(
+            job_id,
+            "Tierzo could not generate this pack.",
+            str(exc),
+        )
 
 
 def format_tool_for_step(tool: str) -> str:
@@ -812,54 +1013,102 @@ def create_generation_job(
     background_tasks: BackgroundTasks,
 ) -> CreateJobResponse:
     job_id = uuid.uuid4().hex
-    JOBS[job_id] = JobRecord(job_id=job_id, steps=default_job_steps())
+    job = JOBS.admit(job_id, default_job_steps())
+    if job is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "job_capacity_reached",
+                "resource": "job",
+                "status": "rejected",
+                "active_capacity": JOBS.active_capacity,
+            },
+        )
     background_tasks.add_task(run_generation_job, job_id, payload)
-    return CreateJobResponse(job_id=job_id, status="queued")
+    return CreateJobResponse(job_id=job_id, status="pending")
 
 
 @app.get("/jobs/{job_id}", response_model=JobResponse)
 def get_generation_job(job_id: str) -> JobResponse:
     job = JOBS.get(job_id)
     if not job:
-        raise HTTPException(status_code=404, detail="Job not found.")
+        return JobResponse(
+            job_id=job_id,
+            status="lost",
+            steps=[],
+        )
+    pack_status = None
+    if job.status == "completed" and job.pack is not None:
+        pack_status = resolve_pack_lifecycle(job.pack.pack_id).status
     return JobResponse(
         job_id=job.job_id,
         status=job.status,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
         steps=job.steps,
         pack=job.pack,
+        pack_status=pack_status,
         error=job.error,
+    )
+
+
+@app.get("/packs/{pack_id}/status", response_model=PackLifecycleResponse)
+def get_pack_status(pack_id: str) -> PackLifecycleResponse:
+    lifecycle = resolve_pack_lifecycle(pack_id)
+    return PackLifecycleResponse(
+        pack_id=lifecycle.pack_id,
+        status=lifecycle.status,
+        created_at=lifecycle.created_at,
+        expires_at=lifecycle.expires_at,
+    )
+
+
+def raise_missing_pack_artifact(
+    lifecycle: PackLifecycle,
+    *,
+    resource: str,
+) -> None:
+    lost = PackLifecycle(
+        pack_id=lifecycle.pack_id,
+        status="lost",
+        created_at=lifecycle.created_at,
+        expires_at=lifecycle.expires_at,
+    )
+    raise HTTPException(
+        status_code=404,
+        detail=lifecycle_error_detail(lost, resource=resource),
     )
 
 
 @app.get("/packs/{pack_id}/files/{filename}")
 def get_pack_file(pack_id: str, filename: str) -> FileResponse:
-    cleanup_expired_storage()
+    resource = "manifest" if filename == "manifest.json" else "image"
+    lifecycle = require_available_pack(pack_id, resource=resource)
+    if Path(filename).name != filename:
+        raise_missing_pack_artifact(lifecycle, resource=resource)
     path = STORAGE_DIR / pack_id / filename
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="File not found.")
+        raise_missing_pack_artifact(lifecycle, resource=resource)
     return FileResponse(path)
 
 
 @app.get("/packs/{pack_id}/zip")
 def get_pack_zip(pack_id: str) -> FileResponse:
-    cleanup_expired_storage()
+    lifecycle = require_available_pack(pack_id, resource="zip")
     path = STORAGE_DIR / f"{pack_id}.zip"
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="ZIP not found.")
+        raise_missing_pack_artifact(lifecycle, resource="zip")
     return FileResponse(path, filename=f"tierzo-{pack_id}.zip")
 
 
 @app.get("/packs/{pack_id}/tiermaker-extension.json", response_model=TierMakerExtensionPayload)
 def get_tiermaker_extension_payload(pack_id: str, request: Request) -> TierMakerExtensionPayload:
-    cleanup_expired_storage()
+    lifecycle = require_available_pack(pack_id, resource="extension")
     pack_dir = STORAGE_DIR / pack_id
     manifest_path = pack_dir / "manifest.json"
-    zip_path = STORAGE_DIR / f"{pack_id}.zip"
 
     if not manifest_path.exists() or not pack_dir.is_dir():
-        raise HTTPException(status_code=404, detail="Pack not found.")
-
-    import json
+        raise_missing_pack_artifact(lifecycle, resource="extension")
 
     manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
     base_url = str(request.base_url).rstrip("/")

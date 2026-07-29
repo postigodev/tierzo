@@ -21,6 +21,9 @@ function makePackItem(id: string, name: string): PackItem {
 function makePack(items: PackItem[]): PackResponse {
   return {
     pack_id: "p",
+    status: "completed",
+    created_at: "2026-07-29T12:00:00Z",
+    expires_at: "2026-07-29T13:00:00Z",
     title: "Pack",
     description: null,
     row_labels: ["S", "A"],
@@ -165,6 +168,32 @@ test("sanitizes v3 state without remigrating it", () => {
   assert.match(result.warnings.join(" "), /no longer have source items/);
 });
 
+test("preserves pre-lifecycle v3 pack snapshots for validation", () => {
+  const currentPack = makePack([makePackItem("a", "Alpha")]);
+  const {
+    status: _status,
+    created_at: _createdAt,
+    expires_at: _expiresAt,
+    ...legacyPack
+  } = currentPack;
+
+  const result = migrateWorkspaceState({
+    version: 3,
+    sourceItems: [{ id: "a", name: "Alpha" }],
+    board: { s: ["a"] },
+    pack: legacyPack,
+    migrationWarnings: [],
+  });
+
+  assert.equal(result.state.pack?.pack_id, "p");
+  assert.equal(result.state.pack?.manifest_url, "/manifest");
+  assert.equal(result.state.pack?.zip_url, "/zip");
+  assert.equal(result.state.pack?.extension_url, "/extension");
+  assert.equal(result.state.pack?.status, "completed");
+  assert.equal(result.state.pack?.created_at, null);
+  assert.equal(result.state.pack?.expires_at, null);
+});
+
 test("reassigns restored IDs that the API would reject", () => {
   const result = migrateWorkspaceState(
     {
@@ -198,4 +227,145 @@ test("v2 to v3 migration is idempotent", () => {
   assert.equal(first.migrated, true);
   assert.equal(second.migrated, false);
   assert.deepEqual(second.state, first.state);
+});
+
+test("preserves the last generation job across v3 sanitization", () => {
+  const result = migrateWorkspaceState({
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    board: { s: ["001"] },
+    pack: makePack([makePackItem("001", "Alpha")]),
+    lastJobId: "job-123",
+    migrationWarnings: [],
+  });
+
+  assert.equal(result.state.lastJobId, "job-123");
+});
+
+test("drops malformed last job IDs without changing editor state", () => {
+  const input = {
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    board: { s: ["001"] },
+    pack: makePack([makePackItem("001", "Alpha")]),
+    lastJobId: " ../job ",
+    migrationWarnings: [],
+  };
+  const result = migrateWorkspaceState(input);
+
+  assert.equal(result.state.lastJobId, null);
+  assert.deepEqual(result.state.sourceItems, input.sourceItems);
+  assert.deepEqual(result.state.board, input.board);
+  assert.deepEqual(result.state.pack, input.pack);
+});
+
+test("preserves every editable field after artifact-only invalidation", () => {
+  const invalidated = {
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    title: "Preserved title",
+    description: "Preserved description",
+    preset: "arcade",
+    cardStyle: null,
+    enrichmentMode: "text",
+    tiers: [{ id: "s", label: "Top" }],
+    board: { s: ["001"] },
+    pack: null,
+    lastJobId: "job-123",
+    migrationWarnings: [],
+  };
+
+  const result = migrateWorkspaceState(invalidated);
+
+  assert.equal(result.state.pack, null);
+  assert.deepEqual(result.state.sourceItems, invalidated.sourceItems);
+  assert.equal(result.state.text, "Alpha");
+  assert.equal(result.state.title, invalidated.title);
+  assert.equal(result.state.description, invalidated.description);
+  assert.equal(result.state.preset, invalidated.preset);
+  assert.equal(result.state.enrichmentMode, invalidated.enrichmentMode);
+  assert.deepEqual(result.state.tiers, invalidated.tiers);
+  assert.deepEqual(result.state.board, invalidated.board);
+  assert.equal(result.state.lastJobId, invalidated.lastJobId);
+});
+
+test("sanitizes unsafe v3 pack source URLs without discarding the snapshot", () => {
+  const sourceUrls = [
+    null,
+    "http://images.example.test/alpha.png",
+    "https://cdn.example.test/beta.png",
+    "javascript:alert(1)",
+    "data:image/png;base64,AAAA",
+    "/relative/gamma.png",
+    "https://",
+  ];
+  const items = sourceUrls.map((sourceUrl, index) => ({
+    ...makePackItem(`item-${index}`, `Item ${index}`),
+    source_url: sourceUrl,
+  }));
+  const input = {
+    version: 3,
+    sourceItems: items.map(({ id, name }) => ({ id, name })),
+    board: {},
+    pack: makePack(items),
+    migrationWarnings: [],
+  };
+
+  const result = migrateWorkspaceState(input);
+
+  assert.equal(result.state.pack?.items.length, sourceUrls.length);
+  assert.deepEqual(
+    result.state.pack?.items.map((item) => item.source_url),
+    [
+      null,
+      "http://images.example.test/alpha.png",
+      "https://cdn.example.test/beta.png",
+      null,
+      null,
+      null,
+      null,
+    ],
+  );
+  assert.deepEqual(result.state.sourceItems, input.sourceItems);
+});
+
+test("sanitizes only unsafe legacy pack source URLs while preserving migration", () => {
+  const sourceUrls = [
+    null,
+    "http://images.example.test/legacy.png",
+    "https://cdn.example.test/legacy.png",
+    "javascript:alert(1)",
+    "data:image/png;base64,AAAA",
+    "relative.png",
+    "http:/malformed.example/image.png",
+  ];
+  const items = sourceUrls.map((sourceUrl, index) => ({
+    ...makePackItem(`legacy-${index}`, `Legacy ${index}`),
+    source_url: sourceUrl,
+  }));
+
+  const result = migrateWorkspaceState({
+    text: items.map((item) => item.name).join("\n"),
+    board: {},
+    pack: makePack(items),
+  });
+
+  assert.equal(result.migrated, true);
+  assert.equal(result.state.pack?.items.length, sourceUrls.length);
+  assert.deepEqual(
+    result.state.pack?.items.map((item) => item.source_url),
+    [
+      null,
+      "http://images.example.test/legacy.png",
+      "https://cdn.example.test/legacy.png",
+      null,
+      null,
+      null,
+      null,
+    ],
+  );
+  assert.deepEqual(
+    result.state.sourceItems.map((item) => item.name),
+    items.map((item) => item.name),
+  );
 });

@@ -1,6 +1,13 @@
-import type { GenerationJob, JobStep, PackItem, PackResponse } from "./types";
+import type {
+  ArtifactState,
+  GenerationJob,
+  JobStep,
+  PackItem,
+  PersistedPackSnapshot,
+  PollingState,
+} from "./types";
 
-export function formatGenerationStatus(pack: PackResponse) {
+export function formatGenerationStatus(pack: PersistedPackSnapshot) {
   const status = pack.enrichment_status;
   if (status === "text") {
     return `Generated ${pack.item_count} text cards.`;
@@ -62,10 +69,38 @@ export function formatMatchQuality(item: PackItem) {
 }
 
 export function formatJobStatus(status: GenerationJob["status"]) {
-  if (status === "queued") return "Queued";
+  if (status === "pending") return "Queued";
   if (status === "running") return "Running checks";
   if (status === "failed") return "Needs attention";
+  if (status === "lost") return "Lost";
   return "Done";
+}
+
+export function formatArtifactState(status: ArtifactState): string | null {
+  if (status === "checking") return "Checking temporary pack availability...";
+  if (status === "expired") {
+    return "This temporary pack expired. Your list and rankings are ready to regenerate.";
+  }
+  if (status === "lost") {
+    return "This temporary pack is no longer available. Your editable workspace is preserved.";
+  }
+  if (status === "validation_unavailable") {
+    return "Pack availability could not be checked. Your saved workspace was left unchanged.";
+  }
+  return null;
+}
+
+export function formatPollingState(status: PollingState): string | null {
+  if (status === "cancelled") {
+    return "Polling was cancelled. Generation may still be running.";
+  }
+  if (status === "timed_out") {
+    return "Polling timed out. Generation may still be running.";
+  }
+  if (status === "lost") {
+    return "This generation job is no longer available.";
+  }
+  return null;
 }
 
 export function formatStepIcon(status: JobStep["status"]) {

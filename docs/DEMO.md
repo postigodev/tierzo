@@ -26,6 +26,14 @@ The current demo already supports:
 
 This is now more than a deterministic text-card demo. It is the first human-in-the-loop agentic demo.
 
+The workspace also recovers honestly across reloads while artifacts remain
+temporary. Tierzo checks a saved pack before enabling image and download
+actions. A confirmed `expired` or `lost` pack hides only those artifact-backed
+actions; the pasted source, editable tier labels, ranking assignments, title,
+description, style, generate mode, and last job ID remain ready to regenerate.
+If the check cannot reach the API, Tierzo leaves the saved workspace untouched
+and reports that validation is unavailable.
+
 ## First-Viewport Requirements
 
 - Brand: Tierzo.
@@ -123,6 +131,23 @@ A demo slice is not done until:
 - The README can show a screenshot or exported result.
 - The flow has one clear “wow” moment.
 - The feature has a local verification command or browser check.
+
+For the lifecycle slice, `pnpm demo:verify` additionally proves:
+
+- a real generation and ranking survive a browser reload;
+- a typed lost-pack response removes artifact actions without erasing editable
+  workspace state;
+- regeneration reuses the preserved board and creates a fresh temporary pack;
+- manifest lifecycle timestamps are unambiguous UTC `Z` values;
+- repeated status reads do not renew the recorded expiration;
+- the regenerated image, ZIP, manifest, and board PNG remain exportable.
+
+The current lifecycle is deliberately ephemeral. Server job states are
+`pending`, `running`, `completed`, `failed`, and `lost`; pack states are
+`completed`, `expired`, and `lost`. Browser-only polling cancellation or
+timeout does not mean generation failed and can be resumed with the saved job
+ID. This demo does not claim durable queues, durable artifact storage,
+cross-restart job recovery, accounts, or permanent history.
 
 ## Demo Roadmap
 

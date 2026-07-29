@@ -46,6 +46,22 @@ The API coordinates backend work:
 - Store temporary artifacts under `.tierzo`.
 - Return pack previews, manifests, ZIPs, and extension payloads.
 
+Generation jobs and packs are intentionally ephemeral in the current
+deployment model. Jobs use the server-owned states `pending`, `running`,
+`completed`, `failed`, and `lost`. A completed job keeps that successful
+outcome even if its separate `pack_status` later becomes `expired` or `lost`.
+Pack states are `completed`, `expired`, and `lost`: `expired` requires retained
+UTC expiration evidence, while an unknown resource without that evidence is
+`lost`. Client polling cancellation and timeout are local outcomes, not server
+failures.
+
+Pack status checks are observational and do not renew artifact lifetime.
+Temporary manifests carry RFC 3339 UTC `created_at` and `expires_at` values;
+artifact endpoints return structured `410 pack_expired` or `404 pack_lost`
+errors consistently with the status resolver. Job records, expiration
+tombstones, and local artifacts are bounded but remain in-process/local
+state—not durable history.
+
 FastAPI remains the preferred backend because Python fits Excel parsing, image generation, AI orchestration, and file exports.
 
 ## Web App
@@ -63,6 +79,18 @@ The web app is the product surface:
 Next.js remains the preferred frontend because the project needs a deployable demo, strong React ergonomics, and a polished product surface.
 
 The first screen should be the usable generator experience, not a marketing hero. See `docs/DEMO.md` for visual and interaction requirements.
+
+The browser persists the editable workspace separately from temporary artifact
+availability. On reload it validates a saved pack. Confirmed expiration or loss
+removes only the pack snapshot and artifact actions; source items, tiers,
+ranking assignments, title, description, style, enrichment configuration, and
+the last generation job ID remain available for regeneration. A failed or
+offline validation is non-destructive and reports availability as unknown.
+
+Polling uses a bounded deadline configured by
+`NEXT_PUBLIC_JOB_POLL_TIMEOUT_MS` (60 seconds by default). Cancelling or timing
+out polling retains the job ID so the same job can be queried again; it does
+not cancel or fail server work.
 
 ## Agent
 
@@ -169,3 +197,18 @@ Initial deployment can be split:
 - API: Railway, Fly.io, Render, or another Python-friendly host.
 - Temporary storage: local filesystem for development, object storage later.
 - Background jobs: synchronous first, queue later when batches become slow.
+
+### Ephemeral lifecycle settings
+
+The API supports:
+
+- `PACK_TTL_SECONDS` for temporary artifact lifetime.
+- `PACK_TOMBSTONE_RETENTION_SECONDS` and `PACK_TOMBSTONE_CAPACITY` for bounded
+  expiration evidence.
+- `JOB_ACTIVE_CAPACITY` (default `8`) for concurrent admission.
+- `JOB_TERMINAL_RETENTION_SECONDS` and `JOB_TERMINAL_CAPACITY` for bounded
+  completed/failed job records.
+
+These settings make the local lifecycle explicit; they do not provide
+cross-process recovery, durable queues, permanent history, accounts, or durable
+artifact storage.

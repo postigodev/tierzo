@@ -6,12 +6,20 @@ import { AgentRunPanel } from "./agent-run-panel";
 import { CardLabPanel } from "./card-lab-panel";
 import { MatchesPanel } from "./matches-panel";
 import { apiUrl } from "../lib/api";
-import { formatGenerationStatus, formatToolName } from "../lib/formatters";
+import { canControlSavedGeneration } from "../lib/generation-lifecycle";
+import {
+  formatArtifactState,
+  formatGenerationStatus,
+  formatPollingState,
+  formatToolName,
+} from "../lib/formatters";
 import type {
+  ArtifactState,
   CardStyle,
   GenerationJob,
   MatchOverrides,
-  PackResponse,
+  PersistedPackSnapshot,
+  PollingState,
   PromptDraftResponse,
 } from "../lib/types";
 
@@ -23,6 +31,7 @@ type FontOption = {
 
 export function SourceTray({
   canReviewMatches,
+  artifactState,
   cardLabStyle,
   cardStyle,
   enrichmentMode,
@@ -33,9 +42,12 @@ export function SourceTray({
   isDraftingPrompt,
   itemCount,
   identityNotice,
+  lastJobId,
   onApplyMatchOverrides,
+  onCancelPolling,
   onDraftFromPrompt,
   onGeneratePack,
+  onResumePolling,
   onSetEnrichmentMode,
   onSetPromptText,
   onSetShowMatches,
@@ -44,6 +56,7 @@ export function SourceTray({
   onUpdateCardStyle,
   onUpdateMatchOverride,
   pack,
+  pollingState,
   preset,
   presets,
   promptDraft,
@@ -54,6 +67,7 @@ export function SourceTray({
   matchOverrides,
 }: {
   canReviewMatches: boolean;
+  artifactState: ArtifactState;
   cardLabStyle: CSSProperties;
   cardStyle: CardStyle;
   enrichmentMode: string;
@@ -64,10 +78,13 @@ export function SourceTray({
   isDraftingPrompt: boolean;
   itemCount: number;
   identityNotice: string | null;
+  lastJobId: string | null;
   matchOverrides: MatchOverrides;
   onApplyMatchOverrides: () => void;
+  onCancelPolling: () => void;
   onDraftFromPrompt: () => void;
   onGeneratePack: () => void;
+  onResumePolling: () => void;
   onSelectPreset: (preset: string) => void;
   onSetEnrichmentMode: (mode: string) => void;
   onSetPromptText: (text: string) => void;
@@ -78,7 +95,8 @@ export function SourceTray({
     itemId: string,
     action: "keep" | "text",
   ) => void;
-  pack: PackResponse | null;
+  pack: PersistedPackSnapshot | null;
+  pollingState: PollingState;
   preset: string;
   presets: string[];
   promptDraft: PromptDraftResponse | null;
@@ -87,6 +105,14 @@ export function SourceTray({
   showMatches: boolean;
   text: string;
 }) {
+  const canControlSavedJob = canControlSavedGeneration({
+    artifactState,
+    hasGenerationJob: generationJob !== null,
+    hasLastJobId: lastJobId !== null,
+    isGenerating,
+    pollingState,
+  });
+
   return (
     <div className="source-tray">
       <div>
@@ -200,8 +226,53 @@ export function SourceTray({
         {identityNotice ? (
           <p className="enrichment-status">{identityNotice}</p>
         ) : null}
-        {generationJob && generationJob.status !== "completed" ? (
-          <AgentRunPanel job={generationJob} />
+        {canControlSavedJob ? (
+          <div className="agent-run" aria-live="polite">
+            <div className="agent-run-head">
+              <div>
+                <strong>Saved generation</strong>
+                <span>
+                  {pollingState === "polling"
+                    ? "Checking current status"
+                    : `Job ${lastJobId?.slice(0, 8) ?? ""}`}
+                </span>
+              </div>
+            </div>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={
+                pollingState === "polling"
+                  ? onCancelPolling
+                  : onResumePolling
+              }
+            >
+              {pollingState === "polling"
+                ? "Cancel polling"
+                : "Resume saved job"}
+            </button>
+          </div>
+        ) : null}
+        {generationJob &&
+        (generationJob.status !== "completed" ||
+          pollingState === "cancelled" ||
+          pollingState === "timed_out") ? (
+          <AgentRunPanel
+            job={generationJob}
+            onCancelPolling={onCancelPolling}
+            onResumePolling={onResumePolling}
+            pollingState={pollingState}
+          />
+        ) : null}
+        {formatPollingState(pollingState) ? (
+          <p className="enrichment-status">
+            {formatPollingState(pollingState)}
+          </p>
+        ) : null}
+        {formatArtifactState(artifactState) ? (
+          <p className="enrichment-status">
+            {formatArtifactState(artifactState)}
+          </p>
         ) : null}
         {pack ? (
           <p className="enrichment-status">{formatGenerationStatus(pack)}</p>

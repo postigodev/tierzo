@@ -1,3 +1,4 @@
+import { sanitizeSourceUrl } from "#tierzo/artifact-contract";
 import { reconcileBoard } from "#tierzo/board-reconciliation";
 import {
   createSourceItemId,
@@ -12,6 +13,7 @@ import type {
   CardStyle,
   PackItem,
   PackResponse,
+  PersistedPackSnapshot,
   SavedWorkspaceState,
   SourceItem,
   TierRow,
@@ -286,7 +288,7 @@ function buildWorkspaceState({
   input: Record<string, unknown>;
   sourceItems: SourceItem[];
   board: BoardState;
-  pack: PackResponse | null;
+  pack: PersistedPackSnapshot | null;
   warnings: string[];
 }): SavedWorkspaceState {
   return {
@@ -301,6 +303,7 @@ function buildWorkspaceState({
     tiers: sanitizeTiers(input.tiers),
     board,
     pack,
+    lastJobId: sanitizeJobId(input.lastJobId),
     migrationWarnings: warnings,
   };
 }
@@ -325,13 +328,16 @@ function sanitizeTiers(input: unknown): TierRow[] {
   });
 }
 
-function sanitizePack(input: unknown): PackResponse | null {
+function sanitizePack(input: unknown): PersistedPackSnapshot | null {
   if (!isRecord(input) || !Array.isArray(input.items)) {
     return null;
   }
-  const items = input.items.filter(isPackItem);
+  const items = input.items
+    .map(sanitizePackItem)
+    .filter((item): item is PackItem => item !== null);
   if (
     typeof input.pack_id !== "string" ||
+    !(input.status === undefined || input.status === "completed") ||
     typeof input.title !== "string" ||
     !(typeof input.description === "string" || input.description === null) ||
     !Array.isArray(input.row_labels) ||
@@ -346,6 +352,11 @@ function sanitizePack(input: unknown): PackResponse | null {
   }
   return {
     pack_id: input.pack_id,
+    status: "completed",
+    created_at:
+      typeof input.created_at === "string" ? input.created_at : null,
+    expires_at:
+      typeof input.expires_at === "string" ? input.expires_at : null,
     title: input.title,
     description: input.description,
     row_labels: input.row_labels,
@@ -372,6 +383,16 @@ function isPackItem(input: unknown): input is PackItem {
     (typeof input.source_url === "string" || input.source_url === null) &&
     (typeof input.confidence === "number" || input.confidence === null)
   );
+}
+
+function sanitizePackItem(input: unknown): PackItem | null {
+  if (!isPackItem(input)) {
+    return null;
+  }
+  return {
+    ...input,
+    source_url: sanitizeSourceUrl(input.source_url),
+  };
 }
 
 function isCardStyle(input: unknown): input is CardStyle {
@@ -412,6 +433,13 @@ function isAgentPlan(
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function sanitizeJobId(value: unknown): string | null {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9_-]{1,128}$/.test(value)
+    ? value
+    : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

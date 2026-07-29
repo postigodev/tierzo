@@ -28,7 +28,9 @@ async function generateAndWaitForNewManifest() {
   const previousHref = (await manifestLink.count())
     ? await manifestLink.getAttribute("href")
     : null;
-  await page.getByRole("button", { name: /generate pack/i }).click();
+  await page
+    .getByRole("button", { name: /(?:create|regenerate) pack/i })
+    .click();
   await page.waitForFunction(
     (previous) => {
       const link = Array.from(document.querySelectorAll("a")).find(
@@ -46,6 +48,28 @@ async function generateAndWaitForNewManifest() {
       ),
     { timeout: 30000 },
   );
+}
+
+async function openPasteComposer() {
+  const sourceEditor = page.locator("details.source-editor-disclosure");
+  if (
+    (await sourceEditor.count()) &&
+    !(await sourceEditor.evaluate((element) => element.open))
+  ) {
+    await sourceEditor.locator("summary").click();
+  }
+
+  const pasteTab = page.getByRole("tab", { name: "Paste list" });
+  if ((await pasteTab.getAttribute("aria-selected")) !== "true") {
+    await pasteTab.click();
+  }
+}
+
+async function openGenerationOptions() {
+  const options = page.locator("details.generation-options");
+  if (!(await options.evaluate((element) => element.open))) {
+    await options.locator("summary").click();
+  }
 }
 
 async function dragItemToTier(itemId, tierIndex) {
@@ -92,16 +116,44 @@ function assertEqual(actual, expected, message) {
 
 try {
   await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
+  if (
+    !(await page.getByRole("tab", { name: "Describe" }).isVisible()) ||
+    !(await page.getByRole("tab", { name: "Paste list" }).isVisible()) ||
+    !(await page.locator(".empty-board-cue").isVisible()) ||
+    (await page.locator(".board").count()) !== 0
+  ) {
+    throw new Error("The empty workspace did not expose the focused composer.");
+  }
+  if (
+    await page
+      .locator("details.generation-options")
+      .evaluate((element) => element.open)
+  ) {
+    throw new Error("Generation options should start collapsed.");
+  }
+
   await page.getByLabel("Tier list title").fill("Identity regeneration");
   await page
     .getByLabel("Tier list description")
     .fill("Lifecycle recovery smoke");
+  await openPasteComposer();
   await page.locator("textarea#items").fill("Alien\nAlien\nThe Thing");
+  await openGenerationOptions();
   await page.getByLabel("Generate mode").selectOption("text");
   await page.getByLabel("Background").fill("#ff0000");
   await page.getByLabel("Text", { exact: true }).fill("#00ff00");
   await page.getByRole("button", { name: "I", exact: true }).click();
   await generateAndWaitForNewManifest();
+  if (
+    (await page.locator(".empty-board-cue").count()) !== 0 ||
+    !(await page.locator(".board").isVisible()) ||
+    !(await page.locator(".source-tray-board-first").isVisible()) ||
+    (await page
+      .locator("details.generation-options")
+      .evaluate((element) => element.open))
+  ) {
+    throw new Error("Generation did not transition to the board-first workspace.");
+  }
 
   const initialIds = await page.locator(".bench .card").evaluateAll((cards) =>
     cards.map((card) => card.getAttribute("data-item-id")),
@@ -133,6 +185,7 @@ try {
     );
   }
 
+  await openPasteComposer();
   await page.locator("textarea#items").fill("The Thing\nAlien\nAliens");
   await page.getByText(/Treated .* as a rename and preserved its ranking/).waitFor();
   await generateAndWaitForNewManifest();
@@ -323,6 +376,7 @@ try {
   }
 
   await page.unroute(statusRoute);
+  await openPasteComposer();
   await generateAndWaitForNewManifest();
   const savedAfterRegeneration = await readSavedWorkspace();
   if (

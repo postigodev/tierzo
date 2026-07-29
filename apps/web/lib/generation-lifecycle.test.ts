@@ -948,6 +948,7 @@ test("completed restoration sanitizes an unsafe persisted source URL", async () 
 
   const outcome = await validateRestoredPack(snapshot, {
     fetchPackStatus: async () => makeLifecycle("completed"),
+    now: () => Date.parse("2026-07-29T12:30:00Z"),
   });
 
   assert.equal(outcome.status, "completed");

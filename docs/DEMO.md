@@ -16,13 +16,14 @@ The current demo already supports:
 
 1. Open Tierzo.
 2. Edit the tier-list title, description, and rows inline.
-3. Paste or edit a source list.
-4. Choose `Auto Agent`, `Text cards only`, or `Movie posters`.
-5. Customize card visuals in Card Lab.
-6. Generate through an observable job panel.
-7. Review matches and force any item back to a text card.
-8. Drag cards onto the tier board.
-9. Export final PNG, ZIP, manifest, and TierMaker extension JSON.
+3. Describe a list or paste exact items from equal entry points.
+4. Optionally expand style and generation settings to choose `Auto Agent`,
+   `Text cards only`, or `Movie posters` and customize Card Lab.
+5. Generate through an observable job panel.
+6. Continue in a board-first workspace; reopen the compact source editor or
+   review matches when needed.
+7. Drag cards onto the tier board.
+8. Export final PNG, ZIP, manifest, and TierMaker extension JSON.
 
 This is now more than a deterministic text-card demo. It is the first human-in-the-loop agentic demo.
 
@@ -38,7 +39,10 @@ and reports that validation is unavailable.
 
 - Brand: Tierzo.
 - Primary action: paste/generate.
-- Visible tier-board or generated asset preview.
+- Compact tier-board cue before generation; the full board takes priority after
+  generation.
+- Describe and Paste are equally visible.
+- Advanced options and Card Lab are available but collapsed by default.
 - No generic marketing hero before the tool.
 - No card-heavy SaaS landing layout before the usable experience.
 

@@ -3,8 +3,10 @@
 import type { CSSProperties } from "react";
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 
+import { EmptyBoardCue } from "../components/empty-board-cue";
 import { SourceTray } from "../components/source-tray";
 import { TierBoard } from "../components/tier-board";
+import { WorkspaceProgress } from "../components/workspace-progress";
 import { usePackGeneration } from "../hooks/use-pack-generation";
 import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
@@ -39,6 +41,7 @@ import {
   migrateWorkspaceState,
   WORKSPACE_STORAGE_KEY,
 } from "../lib/workspace-migration";
+import { deriveWorkspacePhase } from "../lib/workspace-view";
 
 function resolveSavedCardStyle(
   savedStyle?: (CardStyle & { fontFamily?: string }) | null,
@@ -232,6 +235,17 @@ export default function Home() {
         .filter(Boolean).length,
     [deferredText],
   );
+  const workspacePhase = deriveWorkspacePhase({
+    artifactState,
+    hasError: Boolean(error || promptError),
+    hasPack: availablePack !== null,
+    isGenerating,
+    itemCount,
+  });
+  const boardFirst =
+    availablePack !== null ||
+    artifactState === "lost" ||
+    artifactState === "expired";
 
   function buildGeneratePayload(overrides: MatchOverrides = {}) {
     return {
@@ -470,53 +484,10 @@ export default function Home() {
         />
       </header>
 
-      <section className="maker-panel" aria-label="Tierzo editor">
-        <div className="preview-head">
-          <div className="source-list-panel">
-            <h2>{title.trim() || "Untitled list"}</h2>
-          </div>
-          <div className="preview-actions">
-            <button
-              className="download"
-              type="button"
-              onClick={exportBoardPng}
-              disabled={!availablePack || isExporting}
-            >
-              {isExporting ? "Exporting..." : "Export PNG"}
-            </button>
-            {availablePack ? (
-              <a className="download" href={apiUrl(availablePack.zip_url)}>
-                Download ZIP
-              </a>
-            ) : null}
-          </div>
-        </div>
-
-        <TierBoard
-          benchItems={benchItems}
-          board={resolvedBoard}
-          deleteSelectedTier={deleteSelectedTier}
-          dragOverItemId={dragOverItemId}
-          dragOverTierId={dragOverTierId}
-          draggedItemId={draggedItemId}
-          draggedTierId={draggedTierId}
-          insertTier={insertTier}
-          maxTiers={MAX_TIERS}
-          moveDraggedTier={moveDraggedTier}
-          moveItemToBench={moveItemToBench}
-          moveItemToTier={moveItemToTier}
-          onOpenRowMenu={openRowMenu}
-          onSelectTier={setSelectedTierId}
-          onSetDragOverItemId={setDragOverItemId}
-          onSetDragOverTierId={setDragOverTierId}
-          onSetDraggedItemId={setDraggedItemId}
-          onSetDraggedTierId={setDraggedTierId}
-          onUpdateTierLabel={updateTierLabel}
-          rowMenu={rowMenu}
-          selectedTierId={selectedTierId}
-          tiers={tiers}
-        />
-
+      <section
+        className={`maker-panel maker-panel-${workspacePhase}`}
+        aria-label="Tierzo editor"
+      >
         <SourceTray
           artifactState={artifactState}
           canReviewMatches={canReviewMatches}
@@ -558,8 +529,65 @@ export default function Home() {
           promptText={promptText}
           showMatches={showMatches}
           text={text}
+          title={title}
+          workspacePhase={workspacePhase}
         />
 
+        <WorkspaceProgress phase={workspacePhase} />
+
+        {boardFirst ? (
+          <>
+            <div className="preview-head">
+              <div className="source-list-panel">
+                <h2>{title.trim() || "Untitled list"}</h2>
+              </div>
+              <div className="preview-actions">
+                <button
+                  className="download"
+                  type="button"
+                  onClick={exportBoardPng}
+                  disabled={!availablePack || isExporting}
+                >
+                  {isExporting ? "Exporting..." : "Export PNG"}
+                </button>
+                {availablePack ? (
+                  <a
+                    className="download"
+                    href={apiUrl(availablePack.zip_url)}
+                  >
+                    Download ZIP
+                  </a>
+                ) : null}
+              </div>
+            </div>
+            <TierBoard
+              benchItems={benchItems}
+              board={resolvedBoard}
+              deleteSelectedTier={deleteSelectedTier}
+              dragOverItemId={dragOverItemId}
+              dragOverTierId={dragOverTierId}
+              draggedItemId={draggedItemId}
+              draggedTierId={draggedTierId}
+              insertTier={insertTier}
+              maxTiers={MAX_TIERS}
+              moveDraggedTier={moveDraggedTier}
+              moveItemToBench={moveItemToBench}
+              moveItemToTier={moveItemToTier}
+              onOpenRowMenu={openRowMenu}
+              onSelectTier={setSelectedTierId}
+              onSetDragOverItemId={setDragOverItemId}
+              onSetDragOverTierId={setDragOverTierId}
+              onSetDraggedItemId={setDraggedItemId}
+              onSetDraggedTierId={setDraggedTierId}
+              onUpdateTierLabel={updateTierLabel}
+              rowMenu={rowMenu}
+              selectedTierId={selectedTierId}
+              tiers={tiers}
+            />
+          </>
+        ) : (
+          <EmptyBoardCue tiers={tiers} />
+        )}
       </section>
     </main>
   );

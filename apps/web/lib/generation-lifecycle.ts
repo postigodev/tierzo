@@ -9,6 +9,23 @@ const DEFAULT_POLL_TIMEOUT_MS = 60_000;
 const INITIAL_POLL_INTERVAL_MS = 500;
 const MAX_POLL_INTERVAL_MS = 2_000;
 
+export type LatestRequestGuard = {
+  begin: () => number;
+  invalidate: () => void;
+  isCurrent: (token: number) => boolean;
+};
+
+export function createLatestRequestGuard(): LatestRequestGuard {
+  let currentToken = 0;
+  return {
+    begin: () => ++currentToken,
+    invalidate: () => {
+      currentToken += 1;
+    },
+    isCurrent: (token) => token === currentToken,
+  };
+}
+
 export type LifecycleClock = {
   now: () => number;
   setTimeout: (callback: () => void, delayMs: number) => unknown;

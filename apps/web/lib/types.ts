@@ -75,6 +75,23 @@ export type PackLifecycleResponse = {
   expires_at: string | null;
 };
 
+export type ArtifactState =
+  | "idle"
+  | "checking"
+  | "completed"
+  | "expired"
+  | "lost"
+  | "validation_unavailable";
+
+export type PollingState =
+  | "idle"
+  | "polling"
+  | "completed"
+  | "failed"
+  | "lost"
+  | "cancelled"
+  | "timed_out";
+
 export type ItemAssetOverride = {
   action: "text";
 };
@@ -134,6 +151,7 @@ export type SavedWorkspaceState = {
   tiers: TierRow[];
   board: BoardState;
   pack: PersistedPackSnapshot | null;
+  lastJobId: string | null;
   migrationWarnings: string[];
 };
 
@@ -149,6 +167,7 @@ export type LegacySavedDemoState = {
   tiers?: TierRow[];
   board?: LegacyBoardState;
   pack?: PersistedPackSnapshot | null;
+  lastJobId?: string | null;
 };
 
 export type SavedDemoState = SavedWorkspaceState;

@@ -302,6 +302,7 @@ function buildWorkspaceState({
     tiers: sanitizeTiers(input.tiers),
     board,
     pack,
+    lastJobId: sanitizeJobId(input.lastJobId),
     migrationWarnings: warnings,
   };
 }
@@ -419,6 +420,13 @@ function isAgentPlan(
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value : "";
+}
+
+function sanitizeJobId(value: unknown): string | null {
+  return typeof value === "string" &&
+    /^[A-Za-z0-9_-]{1,128}$/.test(value)
+    ? value
+    : null;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

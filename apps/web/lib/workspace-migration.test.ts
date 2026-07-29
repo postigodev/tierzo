@@ -228,3 +228,63 @@ test("v2 to v3 migration is idempotent", () => {
   assert.equal(second.migrated, false);
   assert.deepEqual(second.state, first.state);
 });
+
+test("preserves the last generation job across v3 sanitization", () => {
+  const result = migrateWorkspaceState({
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    board: { s: ["001"] },
+    pack: makePack([makePackItem("001", "Alpha")]),
+    lastJobId: "job-123",
+    migrationWarnings: [],
+  });
+
+  assert.equal(result.state.lastJobId, "job-123");
+});
+
+test("drops malformed last job IDs without changing editor state", () => {
+  const input = {
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    board: { s: ["001"] },
+    pack: makePack([makePackItem("001", "Alpha")]),
+    lastJobId: " ../job ",
+    migrationWarnings: [],
+  };
+  const result = migrateWorkspaceState(input);
+
+  assert.equal(result.state.lastJobId, null);
+  assert.deepEqual(result.state.sourceItems, input.sourceItems);
+  assert.deepEqual(result.state.board, input.board);
+  assert.deepEqual(result.state.pack, input.pack);
+});
+
+test("preserves every editable field after artifact-only invalidation", () => {
+  const invalidated = {
+    version: 3,
+    sourceItems: [{ id: "001", name: "Alpha" }],
+    title: "Preserved title",
+    description: "Preserved description",
+    preset: "arcade",
+    cardStyle: null,
+    enrichmentMode: "text",
+    tiers: [{ id: "s", label: "Top" }],
+    board: { s: ["001"] },
+    pack: null,
+    lastJobId: "job-123",
+    migrationWarnings: [],
+  };
+
+  const result = migrateWorkspaceState(invalidated);
+
+  assert.equal(result.state.pack, null);
+  assert.deepEqual(result.state.sourceItems, invalidated.sourceItems);
+  assert.equal(result.state.text, "Alpha");
+  assert.equal(result.state.title, invalidated.title);
+  assert.equal(result.state.description, invalidated.description);
+  assert.equal(result.state.preset, invalidated.preset);
+  assert.equal(result.state.enrichmentMode, invalidated.enrichmentMode);
+  assert.deepEqual(result.state.tiers, invalidated.tiers);
+  assert.deepEqual(result.state.board, invalidated.board);
+  assert.equal(result.state.lastJobId, invalidated.lastJobId);
+});

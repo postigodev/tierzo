@@ -1,10 +1,23 @@
 "use client";
 
 import { formatJobStatus, formatStepIcon } from "../lib/formatters";
-import type { GenerationJob } from "../lib/types";
+import type { GenerationJob, PollingState } from "../lib/types";
 
-export function AgentRunPanel({ job }: { job: GenerationJob }) {
+export function AgentRunPanel({
+  job,
+  onCancelPolling,
+  onResumePolling,
+  pollingState,
+}: {
+  job: GenerationJob;
+  onCancelPolling: () => void;
+  onResumePolling: () => void;
+  pollingState: PollingState;
+}) {
   const steps = job.steps.length > 0 ? job.steps : [];
+  const canCancel = pollingState === "polling";
+  const canResume =
+    pollingState === "cancelled" || pollingState === "timed_out";
 
   return (
     <section className="agent-run" aria-live="polite">
@@ -13,10 +26,21 @@ export function AgentRunPanel({ job }: { job: GenerationJob }) {
           <strong>Tierzo is building your pack</strong>
           <span>{formatJobStatus(job.status)}</span>
         </div>
-        <span className="agent-run-loop" aria-hidden="true">
-          {"\u21bb"}
-        </span>
+        {pollingState === "polling" ? (
+          <span className="agent-run-loop" aria-hidden="true">
+            {"\u21bb"}
+          </span>
+        ) : null}
       </div>
+      {canCancel || canResume ? (
+        <button
+          className="secondary-action"
+          type="button"
+          onClick={canCancel ? onCancelPolling : onResumePolling}
+        >
+          {canCancel ? "Cancel polling" : "Resume polling"}
+        </button>
+      ) : null}
       <ol className="agent-run-steps">
         {steps.length > 0 ? (
           steps.map((step) => (

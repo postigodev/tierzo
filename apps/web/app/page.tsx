@@ -122,12 +122,17 @@ export default function Home() {
   const deferredText = useDeferredValue(text);
   const canReviewMatches = enrichmentMode !== "text";
   const {
+    artifactState,
+    cancelPolling,
     error,
     generatePack,
     generationJob,
     isGenerating,
+    lastJobId,
     matchOverrides,
     pack,
+    pollingState,
+    resumePolling,
     setError,
     setPack,
     setShowMatches,
@@ -137,8 +142,10 @@ export default function Home() {
   } = usePackGeneration({
     buildPayload: buildGeneratePayload,
     initialPack: savedState.pack,
+    initialLastJobId: savedState.lastJobId,
     shouldShowMatchesOnGenerate: () => canReviewMatches,
   });
+  const availablePack = artifactState === "completed" ? pack : null;
   const {
     benchItems,
     board,
@@ -189,6 +196,7 @@ export default function Home() {
       tiers,
       board,
       pack,
+      lastJobId,
       migrationWarnings: identityNotice ? [identityNotice] : [],
     };
     window.localStorage.setItem(
@@ -201,6 +209,7 @@ export default function Home() {
     description,
     enrichmentMode,
     identityNotice,
+    lastJobId,
     pack,
     preset,
     sourceItems,
@@ -393,7 +402,7 @@ export default function Home() {
   } as CSSProperties;
 
   async function exportBoardPng() {
-    if (!pack) {
+    if (!availablePack) {
       return;
     }
 
@@ -401,13 +410,13 @@ export default function Home() {
     setIsExporting(true);
     try {
       const dataUrl = await renderBoardPng({
-        title: title.trim() || pack.title,
+        title: title.trim() || availablePack.title,
         tiers,
         board: resolvedBoard,
       });
       const link = document.createElement("a");
       link.href = dataUrl;
-      link.download = `${slugify(title || pack.title)}-tierzo-board.png`;
+      link.download = `${slugify(title || availablePack.title)}-tierzo-board.png`;
       link.click();
     } catch (caught) {
       setError(
@@ -471,12 +480,12 @@ export default function Home() {
               className="download"
               type="button"
               onClick={exportBoardPng}
-              disabled={!pack || isExporting}
+              disabled={!availablePack || isExporting}
             >
               {isExporting ? "Exporting..." : "Export PNG"}
             </button>
-            {pack ? (
-              <a className="download" href={apiUrl(pack.zip_url)}>
+            {availablePack ? (
+              <a className="download" href={apiUrl(availablePack.zip_url)}>
                 Download ZIP
               </a>
             ) : null}
@@ -509,6 +518,7 @@ export default function Home() {
         />
 
         <SourceTray
+          artifactState={artifactState}
           canReviewMatches={canReviewMatches}
           cardLabStyle={cardLabStyle}
           cardStyle={cardStyle}
@@ -522,8 +532,10 @@ export default function Home() {
           identityNotice={identityNotice}
           matchOverrides={matchOverrides}
           onApplyMatchOverrides={applyMatchOverrides}
+          onCancelPolling={cancelPolling}
           onDraftFromPrompt={() => void handleDraftFromPrompt()}
           onGeneratePack={() => void handleGeneratePack()}
+          onResumePolling={resumePolling}
           onSelectPreset={selectPreset}
           onSetEnrichmentMode={setEnrichmentMode}
           onSetPromptText={(nextPrompt) => {
@@ -536,7 +548,8 @@ export default function Home() {
           onSetText={updateSourceText}
           onUpdateCardStyle={updateCardStyle}
           onUpdateMatchOverride={updateMatchOverride}
-          pack={pack}
+          pack={availablePack}
+          pollingState={pollingState}
           preset={preset}
           presets={PRESETS}
           promptDraft={promptDraft}

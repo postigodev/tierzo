@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  createLatestRequestGuard,
   pollGenerationJob,
   resolvePollingTimeout,
   RetryablePollingError,
@@ -13,6 +14,7 @@ import type {
   PackLifecycleResponse,
   PackResponse,
   PersistedPackSnapshot,
+  SavedWorkspaceState,
 } from "#tierzo/types";
 
 class FakeClock implements LifecycleClock {
@@ -116,6 +118,19 @@ function makeLifecycle(
     expires_at: status === "lost" ? null : "2026-07-29T13:00:00Z",
   };
 }
+
+test("latest request guard invalidates every older response token", () => {
+  const guard = createLatestRequestGuard();
+  const first = guard.begin();
+  assert.equal(guard.isCurrent(first), true);
+
+  const second = guard.begin();
+  assert.equal(guard.isCurrent(first), false);
+  assert.equal(guard.isCurrent(second), true);
+
+  guard.invalidate();
+  assert.equal(guard.isCurrent(second), false);
+});
 
 async function flushPromises(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -520,20 +535,29 @@ test("server lifecycle responses control restored snapshots", async (t) => {
   }
 });
 
-test("offline restoration preserves the exact input snapshot", async () => {
+test("offline restoration preserves the exact saved workspace", async () => {
   const pack = makeSnapshot({
     created_at: null,
     expires_at: null,
   });
-  const workspace = {
+  const workspace: SavedWorkspaceState = {
+    version: 3,
     sourceItems: [{ id: "alpha", name: "Alpha" }],
-    board: { s: ["alpha"] },
+    text: "Alpha",
     title: "Still editable",
+    description: "Keep this",
+    preset: "arcade",
+    cardStyle: null,
+    enrichmentMode: "text",
+    tiers: [{ id: "s", label: "S" }],
+    board: { s: ["alpha"] },
     pack,
+    lastJobId: "job-restore",
+    migrationWarnings: ["Keep this too"],
   };
   const before = structuredClone(workspace);
 
-  const outcome = await validateRestoredPack(workspace.pack, {
+  const outcome = await validateRestoredPack(pack, {
     now: () => Date.parse("2026-07-29T12:15:00Z"),
     fetchPackStatus: async () => {
       throw new TypeError("offline");

@@ -73,8 +73,11 @@ export function usePackGeneration({
       setGenerationJob({
         job_id: createdJob.job_id,
         status: createdJob.status,
+        created_at: null,
+        updated_at: null,
         steps: [],
         pack: null,
+        pack_status: null,
         error: null,
       });
 

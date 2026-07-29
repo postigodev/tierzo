@@ -21,6 +21,9 @@ function makePackItem(id: string, name: string): PackItem {
 function makePack(items: PackItem[]): PackResponse {
   return {
     pack_id: "p",
+    status: "completed",
+    created_at: "2026-07-29T12:00:00Z",
+    expires_at: "2026-07-29T13:00:00Z",
     title: "Pack",
     description: null,
     row_labels: ["S", "A"],

@@ -19,6 +19,9 @@ export type SourceItem = {
 
 export type PackResponse = {
   pack_id: string;
+  status: "completed";
+  created_at: string;
+  expires_at: string;
   title: string;
   description: string | null;
   row_labels: string[];
@@ -46,10 +49,22 @@ export type JobStep = {
 
 export type GenerationJob = {
   job_id: string;
-  status: "queued" | "running" | "completed" | "failed";
+  status: "pending" | "running" | "completed" | "failed" | "lost";
+  created_at: string | null;
+  updated_at: string | null;
   steps: JobStep[];
   pack: PackResponse | null;
+  pack_status: PackLifecycleStatus | null;
   error: string | null;
+};
+
+export type PackLifecycleStatus = "completed" | "expired" | "lost";
+
+export type PackLifecycleResponse = {
+  pack_id: string;
+  status: PackLifecycleStatus;
+  created_at: string | null;
+  expires_at: string | null;
 };
 
 export type ItemAssetOverride = {

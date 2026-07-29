@@ -62,9 +62,10 @@ export function formatMatchQuality(item: PackItem) {
 }
 
 export function formatJobStatus(status: GenerationJob["status"]) {
-  if (status === "queued") return "Queued";
+  if (status === "pending") return "Queued";
   if (status === "running") return "Running checks";
   if (status === "failed") return "Needs attention";
+  if (status === "lost") return "Lost";
   return "Done";
 }
 

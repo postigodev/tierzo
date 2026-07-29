@@ -4,10 +4,15 @@ import json
 import unittest
 import uuid
 from pathlib import Path
+from unittest.mock import patch
 
 from tierzo.export import generate_pack, generate_pack_from_items, zip_pack
 from tierzo.filenames import image_filename, slugify
-from tierzo.agentic import plan_intake
+from tierzo.agentic import (
+    PromptDraft,
+    draft_prompt_to_tierlist,
+    plan_intake,
+)
 from tierzo.models import SourceItem, source_items_from_strings
 from tierzo.parsers import parse_csv_file, parse_text_lines
 from tierzo.presets import PRESETS, get_preset
@@ -156,6 +161,83 @@ class TierzoCoreTests(unittest.TestCase):
         self.assertEqual(second.items, ["Alien", "The Thing"])
         self.assertFalse(first.cache_hit)
         self.assertTrue(second.cache_hit)
+
+    def test_prompt_draft_heuristics_require_an_explicit_list(self) -> None:
+        tmp = temporary_workspace()
+
+        explicit = draft_prompt_to_tierlist(
+            "Rank these: Alien, Aliens, Arrival",
+            cache_dir=tmp,
+        )
+        vague = draft_prompt_to_tierlist(
+            "best alien movies",
+            cache_dir=tmp,
+        )
+
+        self.assertEqual(explicit.items, ["Alien", "Aliens", "Arrival"])
+        self.assertEqual(explicit.source, "heuristic")
+        self.assertEqual(vague.items, [])
+
+    def test_prompt_draft_caches_are_separated_by_provider_path(self) -> None:
+        tmp = temporary_workspace()
+        prompt = "Alien, Aliens, Arrival"
+
+        heuristic = draft_prompt_to_tierlist(prompt, cache_dir=tmp)
+        openai_result = PromptDraft(
+            title="OpenAI movies",
+            description=None,
+            items=["Alien", "Aliens", "Arrival"],
+            suggested_enrichment_mode="tmdb_movie",
+            confidence=0.9,
+            source="openai",
+        )
+
+        with patch(
+            "tierzo.agentic.prompt_draft_with_openai",
+            return_value=openai_result,
+        ) as openai:
+            configured = draft_prompt_to_tierlist(
+                prompt,
+                cache_dir=tmp,
+                openai_api_key="test",
+            )
+
+        self.assertFalse(heuristic.cache_hit)
+        self.assertFalse(configured.cache_hit)
+        self.assertEqual(configured.source, "openai")
+        openai.assert_called_once()
+
+    def test_openai_failure_does_not_poison_openai_prompt_cache(self) -> None:
+        tmp = temporary_workspace()
+        prompt = "Alien, Aliens, Arrival"
+
+        with patch(
+            "tierzo.agentic.prompt_draft_with_openai",
+            side_effect=[None, PromptDraft(
+                title="Recovered",
+                description=None,
+                items=["Alien", "Aliens", "Arrival"],
+                suggested_enrichment_mode="tmdb_movie",
+                confidence=0.9,
+                source="openai",
+            )],
+        ) as openai:
+            fallback = draft_prompt_to_tierlist(
+                prompt,
+                cache_dir=tmp,
+                openai_api_key="test",
+            )
+            recovered = draft_prompt_to_tierlist(
+                prompt,
+                cache_dir=tmp,
+                openai_api_key="test",
+            )
+
+        self.assertEqual(fallback.source, "heuristic")
+        self.assertFalse(fallback.cache_hit)
+        self.assertEqual(recovered.source, "openai")
+        self.assertFalse(recovered.cache_hit)
+        self.assertEqual(openai.call_count, 2)
 
     def test_zip_pack_writes_archive(self) -> None:
         tmp = temporary_workspace()

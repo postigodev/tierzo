@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
@@ -52,7 +53,8 @@ def plan_intake(
     force_refresh: bool = False,
 ) -> IntakePlan:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / f"{cache_key(text)}.json"
+    preferred_mode = "openai" if openai_api_key else "heuristic"
+    cache_path = agent_cache_path(cache_dir, "intake", preferred_mode, text)
     if cache_path.exists() and not force_refresh:
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         cached.pop("cache_hit", None)
@@ -64,6 +66,7 @@ def plan_intake(
     if plan is None:
         plan = plan_with_heuristics(text)
 
+    cache_path = agent_cache_path(cache_dir, "intake", plan.source, text)
     cache_data = plan.to_dict()
     cache_data.pop("cache_hit", None)
     cache_path.write_text(json.dumps(cache_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -78,7 +81,13 @@ def draft_prompt_to_tierlist(
     force_refresh: bool = False,
 ) -> PromptDraft:
     cache_dir.mkdir(parents=True, exist_ok=True)
-    cache_path = cache_dir / f"{cache_key(f'prompt-draft::{prompt}')}.json"
+    preferred_mode = "openai" if openai_api_key else "heuristic"
+    cache_path = agent_cache_path(
+        cache_dir,
+        "prompt-draft",
+        preferred_mode,
+        prompt,
+    )
     if cache_path.exists() and not force_refresh:
         cached = json.loads(cache_path.read_text(encoding="utf-8"))
         cached.pop("cache_hit", None)
@@ -90,6 +99,12 @@ def draft_prompt_to_tierlist(
     if draft is None:
         draft = prompt_draft_with_heuristics(prompt)
 
+    cache_path = agent_cache_path(
+        cache_dir,
+        "prompt-draft",
+        draft.source,
+        prompt,
+    )
     cache_data = draft.to_dict()
     cache_data.pop("cache_hit", None)
     cache_path.write_text(json.dumps(cache_data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
@@ -201,6 +216,7 @@ def prompt_draft_with_openai(prompt: str, *, openai_api_key: str) -> PromptDraft
 
 def prompt_draft_with_heuristics(prompt: str) -> PromptDraft:
     plan = plan_with_heuristics(prompt)
+    items = parse_explicit_prompt_items(prompt)
     title = build_title_from_prompt(prompt)
     description = None
     if plan.domain == "movies":
@@ -214,7 +230,7 @@ def prompt_draft_with_heuristics(prompt: str) -> PromptDraft:
     return PromptDraft(
         title=title,
         description=description,
-        items=plan.items,
+        items=items,
         suggested_enrichment_mode=suggested_mode,
         confidence=plan.confidence,
         source="heuristic",
@@ -282,6 +298,43 @@ def build_title_from_prompt(prompt: str) -> str:
     if len(cleaned) <= 60:
         return cleaned[:1].upper() + cleaned[1:]
     return cleaned[:57].rstrip() + "..."
+
+
+def parse_explicit_prompt_items(prompt: str) -> list[str]:
+    if not re.search(r"[\r\n;,]", prompt):
+        return []
+
+    values = [
+        " ".join(value.strip().split())
+        for value in re.split(r"[\r\n;,]+", prompt)
+    ]
+    if values:
+        values[0] = re.sub(
+            r"^(?:rank|tier)(?:\s+these)?\s*:?\s*",
+            "",
+            values[0],
+            flags=re.IGNORECASE,
+        )
+
+    items: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        normalized = value.strip()
+        key = normalized.casefold()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        items.append(normalized)
+    return items if len(items) >= 2 else []
+
+
+def agent_cache_path(
+    cache_dir: Path,
+    kind: str,
+    mode: str,
+    text: str,
+) -> Path:
+    return cache_dir / f"{cache_key(f'{kind}::{mode}::{text}')}.json"
 
 
 def cache_key(text: str) -> str:

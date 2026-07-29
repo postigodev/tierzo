@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  canControlSavedGeneration,
   createLatestRequestGuard,
   pollGenerationJob,
   resolvePollingTimeout,
@@ -609,6 +610,54 @@ test("lost must echo the requested pack id", async () => {
     status: "validation_unavailable",
     pack: snapshot,
   });
+});
+
+test("unknown restored pack status preserves the snapshot", async () => {
+  const snapshot = makeSnapshot({
+    created_at: null,
+    expires_at: null,
+  });
+  const outcome = await validateRestoredPack(snapshot, {
+    fetchPackStatus: async () =>
+      ({
+        ...makeLifecycle("lost"),
+        status: "unknown",
+      }) as unknown as PackLifecycleResponse,
+  });
+
+  assert.deepEqual(outcome, {
+    status: "validation_unavailable",
+    pack: snapshot,
+  });
+});
+
+test("saved job controls wait until artifact restoration settles", () => {
+  const base = {
+    hasGenerationJob: false,
+    hasLastJobId: true,
+    isGenerating: false,
+    pollingState: "idle" as const,
+  };
+
+  assert.equal(
+    canControlSavedGeneration({ ...base, artifactState: "checking" }),
+    false,
+  );
+  assert.equal(
+    canControlSavedGeneration({
+      ...base,
+      artifactState: "validation_unavailable",
+    }),
+    true,
+  );
+  assert.equal(
+    canControlSavedGeneration({
+      ...base,
+      artifactState: "completed",
+      isGenerating: true,
+    }),
+    false,
+  );
 });
 
 test("server lifecycle responses control restored snapshots", async (t) => {

@@ -1,8 +1,10 @@
 import type {
+  ArtifactState,
   GenerationJob,
   PackLifecycleResponse,
   PackResponse,
   PersistedPackSnapshot,
+  PollingState,
 } from "#tierzo/types";
 
 const DEFAULT_POLL_TIMEOUT_MS = 60_000;
@@ -24,6 +26,37 @@ export function createLatestRequestGuard(): LatestRequestGuard {
     },
     isCurrent: (token) => token === currentToken,
   };
+}
+
+export function canControlSavedGeneration({
+  artifactState,
+  hasGenerationJob,
+  hasLastJobId,
+  isGenerating,
+  pollingState,
+}: {
+  artifactState: ArtifactState;
+  hasGenerationJob: boolean;
+  hasLastJobId: boolean;
+  isGenerating: boolean;
+  pollingState: PollingState;
+}): boolean {
+  if (
+    artifactState === "checking" ||
+    hasGenerationJob ||
+    !hasLastJobId
+  ) {
+    return false;
+  }
+  if (pollingState === "polling") {
+    return isGenerating;
+  }
+  return (
+    !isGenerating &&
+    (pollingState === "idle" ||
+      pollingState === "cancelled" ||
+      pollingState === "timed_out")
+  );
 }
 
 export type LifecycleClock = {
@@ -234,7 +267,10 @@ export async function validateRestoredPack(
       }
       return { status: "expired", pack: null };
     }
-    return { status: "lost", pack: null };
+    if (lifecycle.status === "lost") {
+      return { status: "lost", pack: null };
+    }
+    return { status: "validation_unavailable", pack };
   } catch {
     return { status: "validation_unavailable", pack };
   }

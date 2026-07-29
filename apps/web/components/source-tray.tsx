@@ -6,6 +6,7 @@ import { AgentRunPanel } from "./agent-run-panel";
 import { CardLabPanel } from "./card-lab-panel";
 import { MatchesPanel } from "./matches-panel";
 import { apiUrl } from "../lib/api";
+import { canControlSavedGeneration } from "../lib/generation-lifecycle";
 import {
   formatArtifactState,
   formatGenerationStatus,
@@ -104,13 +105,13 @@ export function SourceTray({
   showMatches: boolean;
   text: string;
 }) {
-  const canControlSavedJob =
-    lastJobId !== null &&
-    generationJob === null &&
-    (pollingState === "idle" ||
-      pollingState === "polling" ||
-      pollingState === "cancelled" ||
-      pollingState === "timed_out");
+  const canControlSavedJob = canControlSavedGeneration({
+    artifactState,
+    hasGenerationJob: generationJob !== null,
+    hasLastJobId: lastJobId !== null,
+    isGenerating,
+    pollingState,
+  });
 
   return (
     <div className="source-tray">
@@ -233,7 +234,7 @@ export function SourceTray({
                 <span>
                   {pollingState === "polling"
                     ? "Checking current status"
-                    : `Job ${lastJobId.slice(0, 8)}`}
+                    : `Job ${lastJobId?.slice(0, 8) ?? ""}`}
                 </span>
               </div>
             </div>

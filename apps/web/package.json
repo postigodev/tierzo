@@ -10,7 +10,7 @@
     "dev": "next dev",
     "build": "next build",
     "lint": "eslint",
-    "test:state": "node --experimental-strip-types --test lib/source-items.test.ts lib/board-reconciliation.test.ts lib/workspace-migration.test.ts lib/generation-lifecycle.test.ts",
+    "test:state": "node --experimental-strip-types --test lib/source-items.test.ts lib/board-reconciliation.test.ts lib/workspace-migration.test.ts lib/generation-lifecycle.test.ts lib/workspace-view.test.ts",
     "verify:demo": "node scripts/verify-demo.mjs"
   },
   "dependencies": {

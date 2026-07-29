@@ -10,7 +10,7 @@ import unittest
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, call, patch
 
 from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
@@ -210,6 +210,36 @@ class TierzoApiTests(unittest.TestCase):
             self.assertFalse((storage_dir / "allocated-pack.zip").exists())
             self.assertEqual(unrelated_file.read_text(encoding="utf-8"), "keep")
             self.assertEqual(unrelated_zip.read_bytes(), b"keep")
+
+    def test_cleanup_failure_never_masks_generation_error_or_skips_pack_ids(
+        self,
+    ) -> None:
+        generation_error = RuntimeError("original generation failure")
+
+        def allocate_then_fail(
+            _payload: object,
+            _progress_callback: object,
+            allocated_pack_ids: list[str],
+        ) -> None:
+            allocated_pack_ids.extend(["first-pack", "second-pack"])
+            raise generation_error
+
+        with (
+            patch.object(api_main, "_build_pack", side_effect=allocate_then_fail),
+            patch.object(
+                api_main.PACK_LIFECYCLE_REGISTRY,
+                "discard",
+                side_effect=[OSError("cleanup failed"), True],
+            ) as discard,
+        ):
+            with self.assertRaises(RuntimeError) as raised:
+                api_main.build_pack(Mock())
+
+        self.assertIs(raised.exception, generation_error)
+        self.assertEqual(
+            discard.call_args_list,
+            [call("first-pack"), call("second-pack")],
+        )
 
     def test_discard_rejects_pack_id_path_traversal(self) -> None:
         tierzo_test_dir = api_main.ROOT_DIR / ".tierzo"

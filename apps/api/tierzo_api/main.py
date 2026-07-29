@@ -643,7 +643,10 @@ def build_pack(
         return _build_pack(payload, progress_callback, allocated_pack_ids)
     except Exception:
         for pack_id in allocated_pack_ids:
-            PACK_LIFECYCLE_REGISTRY.discard(pack_id)
+            try:
+                PACK_LIFECYCLE_REGISTRY.discard(pack_id)
+            except Exception:
+                pass
         raise
 
 

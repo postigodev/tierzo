@@ -114,8 +114,18 @@ function makeLifecycle(
   return {
     pack_id: "pack-1",
     status,
-    created_at: status === "lost" ? null : "2026-07-29T12:00:00Z",
-    expires_at: status === "lost" ? null : "2026-07-29T13:00:00Z",
+    created_at:
+      status === "lost"
+        ? null
+        : status === "expired"
+          ? "2026-07-29T11:00:00Z"
+          : "2026-07-29T12:00:00Z",
+    expires_at:
+      status === "lost"
+        ? null
+        : status === "expired"
+          ? "2026-07-29T12:10:00Z"
+          : "2026-07-29T13:00:00Z",
   };
 }
 
@@ -504,6 +514,94 @@ test("does not promote completed lifecycle metadata with untrusted timestamps", 
       status: "completed",
       created_at: null,
       expires_at: "2026-07-29T13:05:00-05:00",
+    }),
+  });
+
+  assert.deepEqual(outcome, {
+    status: "validation_unavailable",
+    pack: snapshot,
+  });
+});
+
+test("requires trustworthy server evidence before accepting expired", async (t) => {
+  const snapshot = makeSnapshot({
+    created_at: null,
+    expires_at: null,
+  });
+  const now = () => Date.parse("2026-07-29T12:30:00Z");
+  const invalidResponses: Array<{
+    name: string;
+    response: PackLifecycleResponse;
+  }> = [
+    {
+      name: "mismatched pack id",
+      response: {
+        ...makeLifecycle("expired"),
+        pack_id: "different-pack",
+      },
+    },
+    {
+      name: "null timestamp",
+      response: {
+        ...makeLifecycle("expired"),
+        expires_at: null,
+      },
+    },
+    {
+      name: "malformed timestamp",
+      response: {
+        ...makeLifecycle("expired"),
+        expires_at: "2026-07-29 12:10:00Z",
+      },
+    },
+    {
+      name: "future expiration",
+      response: {
+        ...makeLifecycle("expired"),
+        expires_at: "2026-07-29T13:00:00Z",
+      },
+    },
+    {
+      name: "created after expiration",
+      response: {
+        ...makeLifecycle("expired"),
+        created_at: "2026-07-29T12:20:00Z",
+        expires_at: "2026-07-29T12:10:00Z",
+      },
+    },
+  ];
+
+  for (const { name, response } of invalidResponses) {
+    await t.test(name, async () => {
+      const outcome = await validateRestoredPack(snapshot, {
+        now,
+        fetchPackStatus: async () => response,
+      });
+      assert.deepEqual(outcome, {
+        status: "validation_unavailable",
+        pack: snapshot,
+      });
+    });
+  }
+
+  await t.test("valid expired evidence", async () => {
+    const outcome = await validateRestoredPack(snapshot, {
+      now,
+      fetchPackStatus: async () => makeLifecycle("expired"),
+    });
+    assert.deepEqual(outcome, { status: "expired", pack: null });
+  });
+});
+
+test("lost must echo the requested pack id", async () => {
+  const snapshot = makeSnapshot({
+    created_at: null,
+    expires_at: null,
+  });
+  const outcome = await validateRestoredPack(snapshot, {
+    fetchPackStatus: async () => ({
+      ...makeLifecycle("lost"),
+      pack_id: "different-pack",
     }),
   });
 

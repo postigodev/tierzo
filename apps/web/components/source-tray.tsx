@@ -41,6 +41,7 @@ export function SourceTray({
   isDraftingPrompt,
   itemCount,
   identityNotice,
+  lastJobId,
   onApplyMatchOverrides,
   onCancelPolling,
   onDraftFromPrompt,
@@ -76,6 +77,7 @@ export function SourceTray({
   isDraftingPrompt: boolean;
   itemCount: number;
   identityNotice: string | null;
+  lastJobId: string | null;
   matchOverrides: MatchOverrides;
   onApplyMatchOverrides: () => void;
   onCancelPolling: () => void;
@@ -102,6 +104,14 @@ export function SourceTray({
   showMatches: boolean;
   text: string;
 }) {
+  const canControlSavedJob =
+    lastJobId !== null &&
+    generationJob === null &&
+    (pollingState === "idle" ||
+      pollingState === "polling" ||
+      pollingState === "cancelled" ||
+      pollingState === "timed_out");
+
   return (
     <div className="source-tray">
       <div>
@@ -214,6 +224,33 @@ export function SourceTray({
         {error ? <p className="error">{error}</p> : null}
         {identityNotice ? (
           <p className="enrichment-status">{identityNotice}</p>
+        ) : null}
+        {canControlSavedJob ? (
+          <div className="agent-run" aria-live="polite">
+            <div className="agent-run-head">
+              <div>
+                <strong>Saved generation</strong>
+                <span>
+                  {pollingState === "polling"
+                    ? "Checking current status"
+                    : `Job ${lastJobId.slice(0, 8)}`}
+                </span>
+              </div>
+            </div>
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={
+                pollingState === "polling"
+                  ? onCancelPolling
+                  : onResumePolling
+              }
+            >
+              {pollingState === "polling"
+                ? "Cancel polling"
+                : "Resume saved job"}
+            </button>
+          </div>
         ) : null}
         {generationJob &&
         (generationJob.status !== "completed" ||

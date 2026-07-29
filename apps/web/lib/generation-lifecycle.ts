@@ -193,6 +193,9 @@ export async function validateRestoredPack(
 
   try {
     const lifecycle = await fetchPackStatus(pack.pack_id, signal);
+    if (lifecycle.pack_id !== pack.pack_id) {
+      return { status: "validation_unavailable", pack };
+    }
     if (lifecycle.status === "completed") {
       if (
         typeof lifecycle.created_at !== "string" ||
@@ -205,8 +208,7 @@ export async function validateRestoredPack(
       if (
         createdAt === null ||
         expiresAt === null ||
-        createdAt > expiresAt ||
-        lifecycle.pack_id !== pack.pack_id
+        createdAt > expiresAt
       ) {
         return { status: "validation_unavailable", pack };
       }
@@ -219,7 +221,20 @@ export async function validateRestoredPack(
         },
       };
     }
-    return { status: lifecycle.status, pack: null };
+    if (lifecycle.status === "expired") {
+      const createdAt = parseTrustedUtcTimestamp(lifecycle.created_at);
+      const expiresAt = parseTrustedUtcTimestamp(lifecycle.expires_at);
+      if (
+        createdAt === null ||
+        expiresAt === null ||
+        createdAt > expiresAt ||
+        expiresAt > now()
+      ) {
+        return { status: "validation_unavailable", pack };
+      }
+      return { status: "expired", pack: null };
+    }
+    return { status: "lost", pack: null };
   } catch {
     return { status: "validation_unavailable", pack };
   }

@@ -530,6 +530,7 @@ export default function Home() {
           isDraftingPrompt={isDraftingPrompt}
           itemCount={itemCount}
           identityNotice={identityNotice}
+          lastJobId={lastJobId}
           matchOverrides={matchOverrides}
           onApplyMatchOverrides={applyMatchOverrides}
           onCancelPolling={cancelPolling}

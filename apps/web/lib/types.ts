@@ -20,8 +20,8 @@ export type SourceItem = {
 export type PackResponse = {
   pack_id: string;
   status: "completed";
-  created_at: string;
-  expires_at: string;
+  created_at: string | null;
+  expires_at: string | null;
   title: string;
   description: string | null;
   row_labels: string[];

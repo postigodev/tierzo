@@ -168,6 +168,32 @@ test("sanitizes v3 state without remigrating it", () => {
   assert.match(result.warnings.join(" "), /no longer have source items/);
 });
 
+test("preserves pre-lifecycle v3 pack snapshots for validation", () => {
+  const currentPack = makePack([makePackItem("a", "Alpha")]);
+  const {
+    status: _status,
+    created_at: _createdAt,
+    expires_at: _expiresAt,
+    ...legacyPack
+  } = currentPack;
+
+  const result = migrateWorkspaceState({
+    version: 3,
+    sourceItems: [{ id: "a", name: "Alpha" }],
+    board: { s: ["a"] },
+    pack: legacyPack,
+    migrationWarnings: [],
+  });
+
+  assert.equal(result.state.pack?.pack_id, "p");
+  assert.equal(result.state.pack?.manifest_url, "/manifest");
+  assert.equal(result.state.pack?.zip_url, "/zip");
+  assert.equal(result.state.pack?.extension_url, "/extension");
+  assert.equal(result.state.pack?.status, "completed");
+  assert.equal(result.state.pack?.created_at, null);
+  assert.equal(result.state.pack?.expires_at, null);
+});
+
 test("reassigns restored IDs that the API would reject", () => {
   const result = migrateWorkspaceState(
     {

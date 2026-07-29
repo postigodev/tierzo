@@ -194,6 +194,65 @@ test("uses bounded exponential backoff between pending requests", async () => {
   assert.deepEqual(delays, [500, 1_000, 2_000, 2_000]);
 });
 
+test("retries a transient fetch failure with the same bounded backoff", async () => {
+  const clock = new FakeClock();
+  let requestCount = 0;
+  const poll = pollGenerationJob({
+    jobId: "job-1",
+    timeoutMs: 5_000,
+    clock,
+    fetchJob: async () => {
+      requestCount += 1;
+      if (requestCount === 1) {
+        throw new TypeError("temporary network failure");
+      }
+      return makeJob("completed", { pack: makePack() });
+    },
+  }).catch((error: unknown) => ({ status: "threw" as const, error }));
+
+  await flushPromises();
+  assert.equal(requestCount, 1);
+  await clock.advanceBy(499);
+  assert.equal(requestCount, 1);
+  await clock.advanceBy(1);
+
+  const outcome = await poll;
+  assert.equal(outcome.status, "completed");
+  assert.equal(requestCount, 2);
+});
+
+test("repeated fetch failures time out without a post-deadline request", async () => {
+  const clock = new FakeClock();
+  let requestCount = 0;
+  const poll = pollGenerationJob({
+    jobId: "job-1",
+    timeoutMs: 3_000,
+    clock,
+    fetchJob: async () => {
+      requestCount += 1;
+      throw new TypeError("offline");
+    },
+  }).catch((error: unknown) => ({ status: "threw" as const, error }));
+
+  await flushPromises();
+  assert.equal(requestCount, 1);
+  await clock.advanceBy(500);
+  assert.equal(requestCount, 2);
+  await clock.advanceBy(1_000);
+  assert.equal(requestCount, 3);
+  await clock.advanceBy(1_499);
+  assert.equal(requestCount, 3);
+  await clock.advanceBy(1);
+
+  assert.deepEqual(await poll, {
+    status: "timed_out",
+    jobId: "job-1",
+  });
+  assert.equal(requestCount, 3);
+  await clock.advanceBy(10_000);
+  assert.equal(requestCount, 3);
+});
+
 test("times out an in-flight request exactly at the deadline", async () => {
   const clock = new FakeClock();
   let requestCount = 0;
@@ -319,6 +378,34 @@ test("local expiration skips validation fetch and invalidates the snapshot", asy
 
   assert.deepEqual(outcome, { status: "expired", pack: null });
   assert.equal(requestCount, 0);
+});
+
+test("untrusted expiry formats fall through to server validation", async (t) => {
+  const untrustedValues: Array<string | null> = [
+    null,
+    "2026-07-29 12:30:00Z",
+    "2026-07-29T07:30:00-05:00",
+    "2026-07-29T12:30:00z",
+    "2026-02-30T12:30:00Z",
+  ];
+
+  for (const expiresAt of untrustedValues) {
+    await t.test(String(expiresAt), async () => {
+      const pack = makePack({ expires_at: expiresAt });
+      let requestCount = 0;
+
+      const outcome = await validateRestoredPack(pack, {
+        now: () => Date.parse("2026-07-29T12:30:00Z"),
+        fetchPackStatus: async () => {
+          requestCount += 1;
+          return makeLifecycle("completed");
+        },
+      });
+
+      assert.deepEqual(outcome, { status: "completed", pack });
+      assert.equal(requestCount, 1);
+    });
+  }
 });
 
 test("server lifecycle responses control restored snapshots", async (t) => {

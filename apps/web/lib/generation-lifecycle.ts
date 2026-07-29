@@ -89,8 +89,7 @@ export async function pollGenerationJob({
   timeoutMs,
   clock = systemClock,
 }: PollGenerationJobOptions): Promise<PollOutcome> {
-  const deadline =
-    clock.now() + resolvePollingTimeout(timeoutMs);
+  const deadline = clock.now() + resolvePollingTimeout(timeoutMs);
   let intervalMs = INITIAL_POLL_INTERVAL_MS;
 
   for (;;) {
@@ -101,31 +100,41 @@ export async function pollGenerationJob({
       return { status: "timed_out", jobId };
     }
 
-    const request = await fetchBeforeDeadline({
-      clock,
-      deadline,
-      fetchJob,
-      jobId,
-      signal,
-    });
-    if (request.status !== "received") {
-      return { status: request.status, jobId };
+    let request:
+      | Awaited<ReturnType<typeof fetchBeforeDeadline>>
+      | null = null;
+    try {
+      request = await fetchBeforeDeadline({
+        clock,
+        deadline,
+        fetchJob,
+        jobId,
+        signal,
+      });
+    } catch {
+      // A transport failure is transient until the client deadline expires.
     }
 
-    if (signal?.aborted) {
-      return { status: "cancelled", jobId };
-    }
-    if (clock.now() >= deadline) {
-      return { status: "timed_out", jobId };
-    }
+    if (request !== null) {
+      if (request.status !== "received") {
+        return { status: request.status, jobId };
+      }
 
-    const job = request.job;
-    if (
-      job.status === "completed" ||
-      job.status === "failed" ||
-      job.status === "lost"
-    ) {
-      return { status: job.status, jobId, job };
+      if (signal?.aborted) {
+        return { status: "cancelled", jobId };
+      }
+      if (clock.now() >= deadline) {
+        return { status: "timed_out", jobId };
+      }
+
+      const job = request.job;
+      if (
+        job.status === "completed" ||
+        job.status === "failed" ||
+        job.status === "lost"
+      ) {
+        return { status: job.status, jobId, job };
+      }
     }
 
     const waitResult = await waitBeforeNextRequest({
@@ -149,8 +158,8 @@ export async function validateRestoredPack(
     signal,
   }: ValidateRestoredPackOptions,
 ): Promise<RestoreOutcome> {
-  const expiresAt = Date.parse(pack.expires_at);
-  if (Number.isFinite(expiresAt) && expiresAt <= now()) {
+  const expiresAt = parseTrustedUtcTimestamp(pack.expires_at);
+  if (expiresAt !== null && expiresAt <= now()) {
     return { status: "expired", pack: null };
   }
 
@@ -163,6 +172,53 @@ export async function validateRestoredPack(
   } catch {
     return { status: "validation_unavailable", pack };
   }
+}
+
+function parseTrustedUtcTimestamp(value: string | null): number | null {
+  if (value === null) {
+    return null;
+  }
+  const match =
+    /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?Z$/.exec(
+      value,
+    );
+  if (!match) {
+    return null;
+  }
+
+  const [, yearRaw, monthRaw, dayRaw, hourRaw, minuteRaw, secondRaw] =
+    match;
+  const year = Number(yearRaw);
+  const month = Number(monthRaw);
+  const day = Number(dayRaw);
+  const hour = Number(hourRaw);
+  const minute = Number(minuteRaw);
+  const second = Number(secondRaw);
+  if (
+    month < 1 ||
+    month > 12 ||
+    day < 1 ||
+    day > daysInMonth(year, month) ||
+    hour > 23 ||
+    minute > 59 ||
+    second > 59
+  ) {
+    return null;
+  }
+
+  const timestamp = Date.parse(value);
+  return Number.isFinite(timestamp) ? timestamp : null;
+}
+
+function daysInMonth(year: number, month: number): number {
+  if (month === 2) {
+    const isLeapYear =
+      year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
+    return isLeapYear ? 29 : 28;
+  }
+  return month === 4 || month === 6 || month === 9 || month === 11
+    ? 30
+    : 31;
 }
 
 async function fetchBeforeDeadline({

@@ -332,9 +332,7 @@ function sanitizePack(input: unknown): PackResponse | null {
   const items = input.items.filter(isPackItem);
   if (
     typeof input.pack_id !== "string" ||
-    input.status !== "completed" ||
-    typeof input.created_at !== "string" ||
-    typeof input.expires_at !== "string" ||
+    !(input.status === undefined || input.status === "completed") ||
     typeof input.title !== "string" ||
     !(typeof input.description === "string" || input.description === null) ||
     !Array.isArray(input.row_labels) ||
@@ -349,9 +347,11 @@ function sanitizePack(input: unknown): PackResponse | null {
   }
   return {
     pack_id: input.pack_id,
-    status: input.status,
-    created_at: input.created_at,
-    expires_at: input.expires_at,
+    status: "completed",
+    created_at:
+      typeof input.created_at === "string" ? input.created_at : null,
+    expires_at:
+      typeof input.expires_at === "string" ? input.expires_at : null,
     title: input.title,
     description: input.description,
     row_labels: input.row_labels,

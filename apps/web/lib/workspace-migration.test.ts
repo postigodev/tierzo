@@ -288,3 +288,84 @@ test("preserves every editable field after artifact-only invalidation", () => {
   assert.deepEqual(result.state.board, invalidated.board);
   assert.equal(result.state.lastJobId, invalidated.lastJobId);
 });
+
+test("sanitizes unsafe v3 pack source URLs without discarding the snapshot", () => {
+  const sourceUrls = [
+    null,
+    "http://images.example.test/alpha.png",
+    "https://cdn.example.test/beta.png",
+    "javascript:alert(1)",
+    "data:image/png;base64,AAAA",
+    "/relative/gamma.png",
+    "https://",
+  ];
+  const items = sourceUrls.map((sourceUrl, index) => ({
+    ...makePackItem(`item-${index}`, `Item ${index}`),
+    source_url: sourceUrl,
+  }));
+  const input = {
+    version: 3,
+    sourceItems: items.map(({ id, name }) => ({ id, name })),
+    board: {},
+    pack: makePack(items),
+    migrationWarnings: [],
+  };
+
+  const result = migrateWorkspaceState(input);
+
+  assert.equal(result.state.pack?.items.length, sourceUrls.length);
+  assert.deepEqual(
+    result.state.pack?.items.map((item) => item.source_url),
+    [
+      null,
+      "http://images.example.test/alpha.png",
+      "https://cdn.example.test/beta.png",
+      null,
+      null,
+      null,
+      null,
+    ],
+  );
+  assert.deepEqual(result.state.sourceItems, input.sourceItems);
+});
+
+test("sanitizes only unsafe legacy pack source URLs while preserving migration", () => {
+  const sourceUrls = [
+    null,
+    "http://images.example.test/legacy.png",
+    "https://cdn.example.test/legacy.png",
+    "javascript:alert(1)",
+    "data:image/png;base64,AAAA",
+    "relative.png",
+    "http:/malformed.example/image.png",
+  ];
+  const items = sourceUrls.map((sourceUrl, index) => ({
+    ...makePackItem(`legacy-${index}`, `Legacy ${index}`),
+    source_url: sourceUrl,
+  }));
+
+  const result = migrateWorkspaceState({
+    text: items.map((item) => item.name).join("\n"),
+    board: {},
+    pack: makePack(items),
+  });
+
+  assert.equal(result.migrated, true);
+  assert.equal(result.state.pack?.items.length, sourceUrls.length);
+  assert.deepEqual(
+    result.state.pack?.items.map((item) => item.source_url),
+    [
+      null,
+      "http://images.example.test/legacy.png",
+      "https://cdn.example.test/legacy.png",
+      null,
+      null,
+      null,
+      null,
+    ],
+  );
+  assert.deepEqual(
+    result.state.sourceItems.map((item) => item.name),
+    items.map((item) => item.name),
+  );
+});

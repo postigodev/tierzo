@@ -1,3 +1,7 @@
+import {
+  isNullableAbsoluteHttpUrl,
+  sanitizeSourceUrl,
+} from "#tierzo/artifact-contract";
 import type {
   ArtifactState,
   GenerationJob,
@@ -357,6 +361,10 @@ export async function validateRestoredPack(
           ...pack,
           created_at: lifecycle.created_at,
           expires_at: lifecycle.expires_at,
+          items: pack.items.map((item) => ({
+            ...item,
+            source_url: sanitizeSourceUrl(item.source_url),
+          })),
         },
       };
     }
@@ -544,7 +552,7 @@ function isPackItem(value: unknown): boolean {
     isNonEmptyString(item.asset_kind) &&
     isNonEmptyString(item.source_type) &&
     isNullableString(item.source_value) &&
-    isNullableHttpUrl(item.source_url) &&
+    isNullableAbsoluteHttpUrl(item.source_url) &&
     (item.confidence === null ||
       (typeof item.confidence === "number" &&
         Number.isFinite(item.confidence) &&
@@ -565,27 +573,6 @@ function isSafePathSegment(value: unknown): value is string {
 
 function isSafeFilename(value: unknown): value is string {
   return isSafePathSegment(value);
-}
-
-function isNullableHttpUrl(value: unknown): value is string | null {
-  if (value === null) {
-    return true;
-  }
-  if (
-    typeof value !== "string" ||
-    !/^https?:\/\//i.test(value)
-  ) {
-    return false;
-  }
-  try {
-    const parsed = new URL(value);
-    return (
-      (parsed.protocol === "http:" || parsed.protocol === "https:") &&
-      parsed.hostname.length > 0
-    );
-  } catch {
-    return false;
-  }
 }
 
 function isAgentPlan(value: unknown): boolean {

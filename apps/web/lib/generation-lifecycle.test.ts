@@ -926,3 +926,34 @@ test("accepts only null or absolute HTTP(S) item source URLs", async (t) => {
     });
   }
 });
+
+test("completed restoration sanitizes an unsafe persisted source URL", async () => {
+  const filename = "alpha.png";
+  const snapshot = makeSnapshot({
+    item_count: 1,
+    items: [
+      {
+        id: "alpha",
+        name: "Alpha",
+        filename,
+        image_url: `/packs/pack-1/files/${filename}`,
+        asset_kind: "image",
+        source_type: "provider",
+        source_value: "provider-reference",
+        source_url: "javascript:alert(1)",
+        confidence: 0.9,
+      },
+    ],
+  });
+
+  const outcome = await validateRestoredPack(snapshot, {
+    fetchPackStatus: async () => makeLifecycle("completed"),
+  });
+
+  assert.equal(outcome.status, "completed");
+  assert.equal(outcome.pack?.items[0]?.source_url, null);
+  assert.equal(
+    outcome.pack?.items[0]?.source_value,
+    "provider-reference",
+  );
+});

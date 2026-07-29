@@ -1,3 +1,4 @@
+import { sanitizeSourceUrl } from "#tierzo/artifact-contract";
 import { reconcileBoard } from "#tierzo/board-reconciliation";
 import {
   createSourceItemId,
@@ -331,7 +332,9 @@ function sanitizePack(input: unknown): PersistedPackSnapshot | null {
   if (!isRecord(input) || !Array.isArray(input.items)) {
     return null;
   }
-  const items = input.items.filter(isPackItem);
+  const items = input.items
+    .map(sanitizePackItem)
+    .filter((item): item is PackItem => item !== null);
   if (
     typeof input.pack_id !== "string" ||
     !(input.status === undefined || input.status === "completed") ||
@@ -380,6 +383,16 @@ function isPackItem(input: unknown): input is PackItem {
     (typeof input.source_url === "string" || input.source_url === null) &&
     (typeof input.confidence === "number" || input.confidence === null)
   );
+}
+
+function sanitizePackItem(input: unknown): PackItem | null {
+  if (!isPackItem(input)) {
+    return null;
+  }
+  return {
+    ...input,
+    source_url: sanitizeSourceUrl(input.source_url),
+  };
 }
 
 function isCardStyle(input: unknown): input is CardStyle {

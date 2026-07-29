@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   pollGenerationJob,
   resolvePollingTimeout,
+  RetryablePollingError,
   validateRestoredPack,
   type LifecycleClock,
 } from "#tierzo/generation-lifecycle";
@@ -11,6 +12,7 @@ import type {
   GenerationJob,
   PackLifecycleResponse,
   PackResponse,
+  PersistedPackSnapshot,
 } from "#tierzo/types";
 
 class FakeClock implements LifecycleClock {
@@ -91,6 +93,15 @@ function makePack(overrides: Partial<PackResponse> = {}): PackResponse {
     extension_url: "/packs/pack-1/extension",
     enrichment_status: "text",
     agent_plan: null,
+    ...overrides,
+  };
+}
+
+function makeSnapshot(
+  overrides: Partial<PersistedPackSnapshot> = {},
+): PersistedPackSnapshot {
+  return {
+    ...makePack(),
     ...overrides,
   };
 }
@@ -204,7 +215,7 @@ test("retries a transient fetch failure with the same bounded backoff", async ()
     fetchJob: async () => {
       requestCount += 1;
       if (requestCount === 1) {
-        throw new TypeError("temporary network failure");
+        throw new RetryablePollingError("temporary network failure");
       }
       return makeJob("completed", { pack: makePack() });
     },
@@ -230,7 +241,7 @@ test("repeated fetch failures time out without a post-deadline request", async (
     clock,
     fetchJob: async () => {
       requestCount += 1;
-      throw new TypeError("offline");
+      throw new RetryablePollingError("offline");
     },
   }).catch((error: unknown) => ({ status: "threw" as const, error }));
 
@@ -251,6 +262,29 @@ test("repeated fetch failures time out without a post-deadline request", async (
   assert.equal(requestCount, 3);
   await clock.advanceBy(10_000);
   assert.equal(requestCount, 3);
+});
+
+test("surfaces nonretryable adapter errors without claiming server failure", async () => {
+  const clock = new FakeClock();
+  const adapterError = new Error("invalid job response");
+  let requestCount = 0;
+
+  await assert.rejects(
+    pollGenerationJob({
+      jobId: "job-1",
+      timeoutMs: 3_000,
+      clock,
+      fetchJob: async () => {
+        requestCount += 1;
+        throw adapterError;
+      },
+    }),
+    (error: unknown) => error === adapterError,
+  );
+
+  assert.equal(requestCount, 1);
+  await clock.advanceBy(10_000);
+  assert.equal(requestCount, 1);
 });
 
 test("times out an in-flight request exactly at the deadline", async () => {
@@ -391,7 +425,7 @@ test("untrusted expiry formats fall through to server validation", async (t) => 
 
   for (const expiresAt of untrustedValues) {
     await t.test(String(expiresAt), async () => {
-      const pack = makePack({ expires_at: expiresAt });
+      const pack = makeSnapshot({ expires_at: expiresAt });
       let requestCount = 0;
 
       const outcome = await validateRestoredPack(pack, {
@@ -402,10 +436,66 @@ test("untrusted expiry formats fall through to server validation", async (t) => 
         },
       });
 
-      assert.deepEqual(outcome, { status: "completed", pack });
+      assert.deepEqual(outcome, {
+        status: "completed",
+        pack: {
+          ...pack,
+          created_at: "2026-07-29T12:00:00Z",
+          expires_at: "2026-07-29T13:00:00Z",
+        },
+      });
       assert.equal(requestCount, 1);
     });
   }
+});
+
+test("hydrates a legacy snapshot from trusted completed lifecycle metadata", async () => {
+  const snapshot = makeSnapshot({
+    created_at: null,
+    expires_at: null,
+  });
+  const before = structuredClone(snapshot);
+
+  const outcome = await validateRestoredPack(snapshot, {
+    fetchPackStatus: async () => ({
+      pack_id: "pack-1",
+      status: "completed",
+      created_at: "2026-07-29T12:05:00.123Z",
+      expires_at: "2026-07-29T13:05:00Z",
+    }),
+  });
+
+  assert.deepEqual(outcome, {
+    status: "completed",
+    pack: {
+      ...snapshot,
+      created_at: "2026-07-29T12:05:00.123Z",
+      expires_at: "2026-07-29T13:05:00Z",
+    },
+  });
+  assert.notEqual(outcome.pack, snapshot);
+  assert.deepEqual(snapshot, before);
+});
+
+test("does not promote completed lifecycle metadata with untrusted timestamps", async () => {
+  const snapshot = makeSnapshot({
+    created_at: null,
+    expires_at: null,
+  });
+
+  const outcome = await validateRestoredPack(snapshot, {
+    fetchPackStatus: async () => ({
+      pack_id: "pack-1",
+      status: "completed",
+      created_at: null,
+      expires_at: "2026-07-29T13:05:00-05:00",
+    }),
+  });
+
+  assert.deepEqual(outcome, {
+    status: "validation_unavailable",
+    pack: snapshot,
+  });
 });
 
 test("server lifecycle responses control restored snapshots", async (t) => {
@@ -431,7 +521,10 @@ test("server lifecycle responses control restored snapshots", async (t) => {
 });
 
 test("offline restoration preserves the exact input snapshot", async () => {
-  const pack = makePack();
+  const pack = makeSnapshot({
+    created_at: null,
+    expires_at: null,
+  });
   const workspace = {
     sourceItems: [{ id: "alpha", name: "Alpha" }],
     board: { s: ["alpha"] },

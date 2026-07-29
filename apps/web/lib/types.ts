@@ -20,8 +20,8 @@ export type SourceItem = {
 export type PackResponse = {
   pack_id: string;
   status: "completed";
-  created_at: string | null;
-  expires_at: string | null;
+  created_at: string;
+  expires_at: string;
   title: string;
   description: string | null;
   row_labels: string[];
@@ -38,6 +38,14 @@ export type PackResponse = {
     source: string;
     cache_hit: boolean;
   } | null;
+};
+
+export type PersistedPackSnapshot = Omit<
+  PackResponse,
+  "created_at" | "expires_at"
+> & {
+  created_at: string | null;
+  expires_at: string | null;
 };
 
 export type JobStep = {
@@ -125,7 +133,7 @@ export type SavedWorkspaceState = {
   enrichmentMode: string;
   tiers: TierRow[];
   board: BoardState;
-  pack: PackResponse | null;
+  pack: PersistedPackSnapshot | null;
   migrationWarnings: string[];
 };
 
@@ -140,7 +148,7 @@ export type LegacySavedDemoState = {
   enrichmentMode?: string;
   tiers?: TierRow[];
   board?: LegacyBoardState;
-  pack?: PackResponse | null;
+  pack?: PersistedPackSnapshot | null;
 };
 
 export type SavedDemoState = SavedWorkspaceState;

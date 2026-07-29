@@ -1,6 +1,11 @@
-import type { GenerationJob, JobStep, PackItem, PackResponse } from "./types";
+import type {
+  GenerationJob,
+  JobStep,
+  PackItem,
+  PersistedPackSnapshot,
+} from "./types";
 
-export function formatGenerationStatus(pack: PackResponse) {
+export function formatGenerationStatus(pack: PersistedPackSnapshot) {
   const status = pack.enrichment_status;
   if (status === "text") {
     return `Generated ${pack.item_count} text cards.`;

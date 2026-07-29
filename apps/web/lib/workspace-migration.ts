@@ -12,6 +12,7 @@ import type {
   CardStyle,
   PackItem,
   PackResponse,
+  PersistedPackSnapshot,
   SavedWorkspaceState,
   SourceItem,
   TierRow,
@@ -286,7 +287,7 @@ function buildWorkspaceState({
   input: Record<string, unknown>;
   sourceItems: SourceItem[];
   board: BoardState;
-  pack: PackResponse | null;
+  pack: PersistedPackSnapshot | null;
   warnings: string[];
 }): SavedWorkspaceState {
   return {
@@ -325,7 +326,7 @@ function sanitizeTiers(input: unknown): TierRow[] {
   });
 }
 
-function sanitizePack(input: unknown): PackResponse | null {
+function sanitizePack(input: unknown): PersistedPackSnapshot | null {
   if (!isRecord(input) || !Array.isArray(input.items)) {
     return null;
   }

@@ -2,6 +2,7 @@ import type {
   GenerationJob,
   PackLifecycleResponse,
   PackResponse,
+  PersistedPackSnapshot,
 } from "#tierzo/types";
 
 const DEFAULT_POLL_TIMEOUT_MS = 60_000;
@@ -26,6 +27,14 @@ export type PollGenerationJobOptions = {
   timeoutMs?: number;
   clock?: LifecycleClock;
 };
+
+/**
+ * Marks a fetch-adapter failure as safe to retry. Other thrown errors surface
+ * to the caller unchanged and are never converted into server job outcomes.
+ */
+export class RetryablePollingError extends Error {
+  override readonly name = "RetryablePollingError";
+}
 
 export type PollOutcome =
   | {
@@ -60,7 +69,7 @@ export type RestoreOutcome =
     }
   | {
       status: "validation_unavailable";
-      pack: PackResponse;
+      pack: PersistedPackSnapshot;
     };
 
 const systemClock: LifecycleClock = {
@@ -111,8 +120,10 @@ export async function pollGenerationJob({
         jobId,
         signal,
       });
-    } catch {
-      // A transport failure is transient until the client deadline expires.
+    } catch (error) {
+      if (!(error instanceof RetryablePollingError)) {
+        throw error;
+      }
     }
 
     if (request !== null) {
@@ -151,7 +162,7 @@ export async function pollGenerationJob({
 }
 
 export async function validateRestoredPack(
-  pack: PackResponse,
+  pack: PersistedPackSnapshot,
   {
     fetchPackStatus,
     now = () => Date.now(),
@@ -166,7 +177,30 @@ export async function validateRestoredPack(
   try {
     const lifecycle = await fetchPackStatus(pack.pack_id, signal);
     if (lifecycle.status === "completed") {
-      return { status: "completed", pack };
+      if (
+        typeof lifecycle.created_at !== "string" ||
+        typeof lifecycle.expires_at !== "string"
+      ) {
+        return { status: "validation_unavailable", pack };
+      }
+      const createdAt = parseTrustedUtcTimestamp(lifecycle.created_at);
+      const expiresAt = parseTrustedUtcTimestamp(lifecycle.expires_at);
+      if (
+        createdAt === null ||
+        expiresAt === null ||
+        createdAt > expiresAt ||
+        lifecycle.pack_id !== pack.pack_id
+      ) {
+        return { status: "validation_unavailable", pack };
+      }
+      return {
+        status: "completed",
+        pack: {
+          ...pack,
+          created_at: lifecycle.created_at,
+          expires_at: lifecycle.expires_at,
+        },
+      };
     }
     return { status: lifecycle.status, pack: null };
   } catch {

@@ -1,11 +1,16 @@
 import { useState } from "react";
 
 import { apiUrl } from "../lib/api";
-import type { GenerationJob, MatchOverrides, PackResponse } from "../lib/types";
+import type {
+  GenerationJob,
+  MatchOverrides,
+  PackResponse,
+  PersistedPackSnapshot,
+} from "../lib/types";
 
 type UsePackGenerationOptions = {
   buildPayload: (overrides?: MatchOverrides) => unknown;
-  initialPack?: PackResponse | null;
+  initialPack?: PersistedPackSnapshot | null;
   onPackGenerated?: (pack: PackResponse) => void;
   shouldShowMatchesOnGenerate?: () => boolean;
 };
@@ -16,7 +21,7 @@ export function usePackGeneration({
   onPackGenerated,
   shouldShowMatchesOnGenerate,
 }: UsePackGenerationOptions) {
-  const [pack, setPack] = useState<PackResponse | null>(initialPack);
+  const [pack, setPack] = useState<PersistedPackSnapshot | null>(initialPack);
   const [error, setError] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [showMatches, setShowMatches] = useState(false);

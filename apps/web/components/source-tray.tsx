@@ -11,7 +11,7 @@ import type {
   CardStyle,
   GenerationJob,
   MatchOverrides,
-  PackResponse,
+  PersistedPackSnapshot,
   PromptDraftResponse,
 } from "../lib/types";
 
@@ -78,7 +78,7 @@ export function SourceTray({
     itemId: string,
     action: "keep" | "text",
   ) => void;
-  pack: PackResponse | null;
+  pack: PersistedPackSnapshot | null;
   preset: string;
   presets: string[];
   promptDraft: PromptDraftResponse | null;

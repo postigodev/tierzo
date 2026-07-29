@@ -77,16 +77,23 @@ Avoid demo lists that are too generic, too corporate, or legally awkward as the 
 ### Auto Agent
 
 - Uses `OPENAI_API_KEY` when configured.
-- Classifies the list.
+- Classifies the list with OpenAI or deterministic planning.
 - Chooses a tool such as text cards or TMDb movie posters.
-- Caches plans to reduce repeated calls.
-- Falls back to heuristics/deterministic text cards when unavailable.
+- Keeps provider-specific caches so a heuristic fallback never impersonates a
+  later OpenAI result.
+- Reports successful deterministic fallback as a degraded outcome with a
+  structured warning.
+- Describe works without OpenAI when the prompt contains at least two explicit
+  items separated by commas, semicolons, or newlines. Vague prompts explain
+  that OpenAI or explicit names are required.
 
 ### Movie Posters
 
 - Uses `TMDB_API_KEY`.
+- Remains visible but disabled with an explanation when TMDb is not configured.
 - Fetches real movie posters and source metadata.
-- Falls back to text cards when the key is missing, lookup fails, or an item has no match.
+- Falls back to text cards when lookup fails or an item has no match, returning
+  structured degraded warnings rather than a catastrophic error.
 - Shows source/confidence in Review Matches.
 - Lets users force selected items back to text cards with `asset_overrides`.
 

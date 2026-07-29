@@ -29,7 +29,7 @@ type UsePackGenerationOptions = {
   initialPack?: PersistedPackSnapshot | null;
   initialLastJobId?: string | null;
   onPackGenerated?: (pack: PackResponse) => void;
-  shouldShowMatchesOnGenerate?: () => boolean;
+  shouldShowMatchesOnGenerate?: (pack: PackResponse) => boolean;
 };
 
 function responseError(body: unknown, fallback: string): string {
@@ -259,7 +259,7 @@ export function usePackGeneration({
         const nextPack = artifacts.pack;
         setPackState(nextPack);
         setArtifactState("completed");
-        setShowMatches(shouldShowMatchesOnGenerate?.() ?? true);
+        setShowMatches(shouldShowMatchesOnGenerate?.(nextPack) ?? true);
         setMatchOverrides({});
         onPackGenerated?.(nextPack);
         return nextPack;

@@ -116,6 +116,21 @@ function assertEqual(actual, expected, message) {
 
 try {
   await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
+  const capabilitiesResponse = await fetch("http://localhost:8000/capabilities");
+  const capabilityContract = await capabilitiesResponse.json();
+  if (
+    !capabilitiesResponse.ok ||
+    capabilityContract.schema_version !== "tierzo.capabilities.v1" ||
+    !capabilityContract.capabilities?.text_cards?.available ||
+    !capabilityContract.capabilities?.auto_planning?.available ||
+    capabilityContract.capabilities?.tmdb_movie?.available
+  ) {
+    throw new Error(
+      `Expected deterministic provider-free capabilities: ${JSON.stringify(
+        capabilityContract,
+      )}`,
+    );
+  }
   if (
     !(await page.getByRole("tab", { name: "Describe" }).isVisible()) ||
     !(await page.getByRole("tab", { name: "Paste list" }).isVisible()) ||
@@ -132,6 +147,15 @@ try {
     throw new Error("Generation options should start collapsed.");
   }
 
+  await page
+    .getByLabel("Prompt to tier list")
+    .fill("Rank these: Alien, Aliens, Arrival");
+  await page.getByRole("button", { name: "Draft list" }).click();
+  await page.getByText("3 items ready", { exact: true }).waitFor();
+  await page
+    .getByText(/OpenAI is not configured; Tierzo used deterministic planning/)
+    .waitFor();
+
   await page.getByLabel("Tier list title").fill("Identity regeneration");
   await page
     .getByLabel("Tier list description")
@@ -139,6 +163,34 @@ try {
   await openPasteComposer();
   await page.locator("textarea#items").fill("Alien\nAlien\nThe Thing");
   await openGenerationOptions();
+  const autoOption = page.locator(
+    'select[aria-label="Generate mode"] option[value="auto"]',
+  );
+  const textOption = page.locator(
+    'select[aria-label="Generate mode"] option[value="text"]',
+  );
+  const tmdbOption = page.locator(
+    'select[aria-label="Generate mode"] option[value="tmdb_movie"]',
+  );
+  const generationControls = {
+    autoDisabled: await autoOption.isDisabled(),
+    textDisabled: await textOption.isDisabled(),
+    tmdbDisabled: (await tmdbOption.getAttribute("disabled")) !== null,
+    tmdbText: await tmdbOption.textContent(),
+  };
+  if (
+    generationControls.autoDisabled ||
+    generationControls.textDisabled ||
+    !generationControls.tmdbDisabled ||
+    !generationControls.tmdbText?.includes("unavailable")
+  ) {
+    throw new Error(
+      `Generation mode controls do not match API capabilities: ${JSON.stringify(
+        generationControls,
+      )}`,
+    );
+  }
+  await page.getByText(/Movie posters requires TMDb configuration/).waitFor();
   await page.getByLabel("Generate mode").selectOption("text");
   await page.getByLabel("Background").fill("#ff0000");
   await page.getByLabel("Text", { exact: true }).fill("#00ff00");
@@ -299,6 +351,7 @@ try {
   await page
     .getByRole("link", { name: "Manifest", exact: true })
     .waitFor({ state: "visible" });
+  await openPasteComposer();
   if (
     (await page.locator("textarea#items").inputValue()) !==
     savedBeforeReload.text
@@ -384,6 +437,16 @@ try {
     savedAfterRegeneration.pack.pack_id === restoredPackId
   ) {
     throw new Error("Real regeneration did not replace the lost pack.");
+  }
+  if (
+    savedAfterRegeneration.pack.outcome !== "normal" ||
+    savedAfterRegeneration.pack.warnings.length !== 0
+  ) {
+    throw new Error(
+      `Text generation should be a normal outcome: ${JSON.stringify(
+        savedAfterRegeneration.pack,
+      )}`,
+    );
   }
   assertEqual(
     savedAfterRegeneration.board,
@@ -494,6 +557,13 @@ try {
           status: firstStatus,
           preservedLastJobId: savedAfterLoss.lastJobId,
           preservedRankedIds: rankedIdsAfterLoss,
+        },
+        capabilities: capabilityContract,
+        generationOutcome: {
+          outcome: savedAfterRegeneration.pack.outcome,
+          warningCodes: savedAfterRegeneration.pack.warnings.map(
+            (warning) => warning.code,
+          ),
         },
         zipHref,
         extensionHref,

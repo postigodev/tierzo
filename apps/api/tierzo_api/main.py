@@ -24,6 +24,15 @@ from tierzo.models import SourceItem, source_items_from_strings
 from tierzo.parsers import normalize_text, parse_text_lines
 from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
+from .capabilities import (
+    CapabilitiesResponse,
+    Outcome,
+    ResultWarning,
+    build_capabilities,
+    deduplicate_warnings,
+    make_warning,
+    outcome_for,
+)
 from .environment import ROOT_DIR
 from .lifecycle import (
     PACK_LIFECYCLE_REGISTRY,
@@ -197,6 +206,8 @@ class PromptDraftResponse(BaseModel):
     confidence: float
     source: str
     cache_hit: bool = False
+    outcome: Outcome = "normal"
+    warnings: list[ResultWarning] = Field(default_factory=list)
 
 
 class PackItemResponse(BaseModel):
@@ -226,6 +237,8 @@ class GeneratePackResponse(BaseModel):
     extension_url: str
     enrichment_status: str
     agent_plan: dict[str, object] | None = None
+    outcome: Outcome = "normal"
+    warnings: list[ResultWarning] = Field(default_factory=list)
 
 
 class PackLifecycleResponse(BaseModel):
@@ -522,13 +535,29 @@ def on_startup() -> None:
 JOBS = JobRegistry()
 
 
+def provider_api_key(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 @app.get("/health")
 def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "tmdb_configured": bool(os.getenv("TMDB_API_KEY")),
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "tmdb_configured": provider_api_key("TMDB_API_KEY") is not None,
+        "openai_configured": provider_api_key("OPENAI_API_KEY") is not None,
     }
+
+
+@app.get("/capabilities", response_model=CapabilitiesResponse)
+def capabilities() -> CapabilitiesResponse:
+    return build_capabilities(
+        openai_configured=provider_api_key("OPENAI_API_KEY") is not None,
+        tmdb_configured=provider_api_key("TMDB_API_KEY") is not None,
+    )
 
 
 @app.get("/presets")
@@ -538,26 +567,45 @@ def presets() -> dict[str, list[str]]:
 
 @app.post("/prompt-drafts", response_model=PromptDraftResponse)
 def create_prompt_draft(payload: PromptDraftRequest) -> PromptDraftResponse:
-    openai_api_key = os.getenv("OPENAI_API_KEY")
-    if not openai_api_key:
-        raise HTTPException(
-            status_code=503,
-            detail="Prompt drafting needs OPENAI_API_KEY.",
-        )
-
+    openai_api_key = provider_api_key("OPENAI_API_KEY")
     draft = draft_prompt_to_tierlist(
         payload.prompt,
         cache_dir=PROMPT_DRAFT_CACHE_DIR,
         openai_api_key=openai_api_key,
         force_refresh=payload.force_refresh,
     )
-    if not draft.items:
+    if len(draft.items) < 2:
         raise HTTPException(
             status_code=422,
-            detail="Tierzo could not draft a usable list from that prompt.",
+            detail={
+                "code": "prompt_requires_explicit_items_without_ai",
+                "message": "Add at least two explicit item names or configure OpenAI.",
+            },
         )
 
-    return PromptDraftResponse(**draft.to_dict())
+    warnings: list[ResultWarning] = []
+    if draft.source == "heuristic":
+        warnings.append(
+            make_warning(
+                "openai_provider_heuristic_fallback"
+                if openai_api_key
+                else "openai_unconfigured_heuristic"
+            )
+        )
+
+    suggested_mode = draft.suggested_enrichment_mode
+    if suggested_mode == "tmdb_movie" and provider_api_key("TMDB_API_KEY") is None:
+        suggested_mode = "text"
+        warnings.append(make_warning("tmdb_unconfigured_text_fallback"))
+
+    warnings = deduplicate_warnings(warnings)
+    draft_data = draft.to_dict()
+    draft_data["suggested_enrichment_mode"] = suggested_mode
+    return PromptDraftResponse(
+        **draft_data,
+        outcome=outcome_for(warnings),
+        warnings=warnings,
+    )
 
 
 def resolve_font_path(font_family: str, *, bold: bool, italic: bool) -> Path | None:
@@ -656,6 +704,7 @@ def _build_pack(
     allocated_pack_ids: list[str],
 ) -> GeneratePackResponse:
     agent_plan: IntakePlan | None = None
+    result_warnings: list[ResultWarning] = []
     enrichment_mode = payload.enrichment_mode
     cleanup_expired_storage()
     source_items, has_structured_items = source_items_from_payload(payload)
@@ -665,6 +714,7 @@ def _build_pack(
             detail=f"List too large; maximum is {MAX_LIST_ITEMS} items.",
         )
     if payload.enrichment_mode == "auto":
+        openai_api_key = provider_api_key("OPENAI_API_KEY")
         planning_text = (
             "\n".join(item.name for item in source_items)
             if has_structured_items
@@ -674,12 +724,25 @@ def _build_pack(
         agent_plan = plan_intake(
             planning_text,
             cache_dir=AGENT_CACHE_DIR,
-            openai_api_key=os.getenv("OPENAI_API_KEY"),
+            openai_api_key=openai_api_key,
             force_refresh=payload.agent_cache_refresh,
         )
         if not has_structured_items:
             source_items = legacy_source_items(agent_plan.items)
+        if agent_plan.source == "heuristic":
+            result_warnings.append(
+                make_warning(
+                    "openai_provider_heuristic_fallback"
+                    if openai_api_key
+                    else "openai_unconfigured_heuristic"
+                )
+            )
         enrichment_mode = agent_plan.tool
+        if enrichment_mode not in {"text", "tmdb_movie"}:
+            enrichment_mode = "text"
+            result_warnings.append(
+                make_warning("unsupported_planner_tool_text_fallback")
+            )
         if progress_callback:
             source = "cache" if agent_plan.cache_hit else agent_plan.source
             progress_callback("plan_done", f"Picked {agent_plan.domain} via {source}.")
@@ -753,7 +816,7 @@ def _build_pack(
         if override.action == "text"
     }
     if enrichment_mode == "tmdb_movie":
-        api_key = os.getenv("TMDB_API_KEY")
+        api_key = provider_api_key("TMDB_API_KEY")
         if api_key:
             try:
                 if progress_callback:
@@ -775,11 +838,26 @@ def _build_pack(
                     and item.id not in force_text_item_ids
                 }
                 enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(source_items)}"
+                expected_enriched_count = sum(
+                    item.name not in force_text_values
+                    and item.id not in force_text_item_ids
+                    for item in source_items
+                )
+                if len(enriched_assets) < expected_enriched_count:
+                    result_warnings.append(
+                        make_warning("tmdb_partial_match")
+                    )
             except Exception:
                 enriched_assets = None
                 enrichment_status = "tmdb_movie:error_fallback_text"
+                result_warnings.append(
+                    make_warning("tmdb_provider_text_fallback")
+                )
         else:
             enrichment_status = "tmdb_movie:missing_api_key_fallback_text"
+            result_warnings.append(
+                make_warning("tmdb_unconfigured_text_fallback")
+            )
     if progress_callback:
         asset_status, asset_detail = summarize_asset_step(
             GeneratePackResponse(
@@ -882,6 +960,7 @@ def _build_pack(
         for item in manifest.items
     ]
 
+    result_warnings = deduplicate_warnings(result_warnings)
     return GeneratePackResponse(
         pack_id=pack_id,
         status="completed",
@@ -897,6 +976,8 @@ def _build_pack(
         extension_url=f"/packs/{pack_id}/tiermaker-extension.json",
         enrichment_status=enrichment_status,
         agent_plan=agent_plan.to_dict() if agent_plan else None,
+        outcome=outcome_for(result_warnings),
+        warnings=result_warnings,
     )
 
 

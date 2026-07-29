@@ -17,6 +17,21 @@ export type SourceItem = {
   name: string;
 };
 
+export type GenerationOutcome = "normal" | "degraded";
+
+export type GenerationWarningCode =
+  | "openai_unconfigured_heuristic"
+  | "openai_provider_heuristic_fallback"
+  | "tmdb_unconfigured_text_fallback"
+  | "tmdb_provider_text_fallback"
+  | "tmdb_partial_match"
+  | "unsupported_planner_tool_text_fallback";
+
+export type GenerationWarning = {
+  code: GenerationWarningCode;
+  message: string;
+};
+
 export type PackResponse = {
   pack_id: string;
   status: "completed";
@@ -31,6 +46,8 @@ export type PackResponse = {
   zip_url: string;
   extension_url: string;
   enrichment_status: string;
+  outcome: GenerationOutcome;
+  warnings: GenerationWarning[];
   agent_plan: {
     domain: string;
     tool: string;
@@ -106,6 +123,29 @@ export type PromptDraftResponse = {
   confidence: number;
   source: string;
   cache_hit: boolean;
+  outcome: GenerationOutcome;
+  warnings: GenerationWarning[];
+};
+
+export type CapabilityEntry = {
+  available: boolean;
+  effective_mode:
+    | "deterministic"
+    | "openai"
+    | "heuristic"
+    | "tmdb"
+    | "unavailable";
+  reason_code: "openai_unconfigured" | "tmdb_unconfigured" | null;
+};
+
+export type CapabilitiesResponse = {
+  schema_version: "tierzo.capabilities.v1";
+  capabilities: {
+    text_cards: CapabilityEntry;
+    prompt_drafting: CapabilityEntry;
+    auto_planning: CapabilityEntry;
+    tmdb_movie: CapabilityEntry;
+  };
 };
 
 export type CardStyle = {

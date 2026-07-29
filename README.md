@@ -13,7 +13,10 @@ The current version includes a reusable Python core, a CLI, a FastAPI backend, a
 - Use basic visual presets.
 - Tune cards in the web Card Lab.
 - Run generation as observable jobs.
-- Use Auto Agent to classify pasted lists when `OPENAI_API_KEY` is configured.
+- Use Auto Agent with OpenAI when configured or deterministic planning when it
+  is not.
+- Draft from an explicit comma-, semicolon-, or newline-separated list without
+  AI; open-ended prompts require `OPENAI_API_KEY`.
 - Optionally enrich movie lists with TMDb posters.
 - Review matches, force specific items back to text cards, and regenerate.
 - Write a portable `manifest.json`.
@@ -188,7 +191,15 @@ Tierzo is heading toward:
 
 The first web demo lives in `apps/web` and talks to the FastAPI service in `apps/api`.
 
-Optional agentic planning uses OpenAI and optional movie poster enrichment uses TMDb. Without these keys, Tierzo safely falls back to deterministic text cards.
+Optional agentic planning uses OpenAI and optional movie poster enrichment uses
+TMDb. Without keys, Auto and text-card generation remain available. Describe
+can deterministically clean up an explicit list, while open-ended prompts that
+require Tierzo to invent items need OpenAI. Movie posters remains visible but
+disabled when TMDb is not configured.
+
+The API publishes this configuration through `GET /capabilities`. Successful
+fallbacks return `outcome: "degraded"` with structured warnings instead of
+being presented as total generation failures.
 
 ```powershell
 $env:OPENAI_API_KEY="your_openai_api_key"

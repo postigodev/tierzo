@@ -1,5 +1,6 @@
 import { sanitizeSourceUrl } from "#tierzo/artifact-contract";
 import { reconcileBoard } from "#tierzo/board-reconciliation";
+import { normalizeGenerationOutcome } from "#tierzo/generation-outcome";
 import {
   createSourceItemId,
   isValidSourceItemId,
@@ -350,6 +351,14 @@ function sanitizePack(input: unknown): PersistedPackSnapshot | null {
   ) {
     return null;
   }
+  const generationOutcome = normalizeGenerationOutcome(
+    input.enrichment_status,
+    input.outcome,
+    input.warnings,
+  );
+  if (generationOutcome === null) {
+    return null;
+  }
   return {
     pack_id: input.pack_id,
     status: "completed",
@@ -366,6 +375,7 @@ function sanitizePack(input: unknown): PersistedPackSnapshot | null {
     zip_url: input.zip_url,
     extension_url: input.extension_url,
     enrichment_status: input.enrichment_status,
+    ...generationOutcome,
     agent_plan: input.agent_plan,
   };
 }

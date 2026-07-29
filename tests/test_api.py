@@ -87,6 +87,19 @@ class TierzoApiTests(unittest.TestCase):
             configured.json()["capabilities"]["tmdb_movie"]["effective_mode"],
             "tmdb",
         )
+        with patch.dict(
+            os.environ,
+            {"OPENAI_API_KEY": "   ", "TMDB_API_KEY": "   "},
+            clear=True,
+        ):
+            whitespace = client.get("/capabilities").json()
+        self.assertEqual(
+            whitespace["capabilities"]["prompt_drafting"]["effective_mode"],
+            "heuristic",
+        )
+        self.assertFalse(
+            whitespace["capabilities"]["tmdb_movie"]["available"],
+        )
 
     def test_prompt_draft_uses_structured_heuristic_fallback_without_openai(
         self,

@@ -535,20 +535,28 @@ def on_startup() -> None:
 JOBS = JobRegistry()
 
 
+def provider_api_key(name: str) -> str | None:
+    value = os.getenv(name)
+    if value is None:
+        return None
+    normalized = value.strip()
+    return normalized or None
+
+
 @app.get("/health")
 def health() -> dict[str, object]:
     return {
         "status": "ok",
-        "tmdb_configured": bool(os.getenv("TMDB_API_KEY")),
-        "openai_configured": bool(os.getenv("OPENAI_API_KEY")),
+        "tmdb_configured": provider_api_key("TMDB_API_KEY") is not None,
+        "openai_configured": provider_api_key("OPENAI_API_KEY") is not None,
     }
 
 
 @app.get("/capabilities", response_model=CapabilitiesResponse)
 def capabilities() -> CapabilitiesResponse:
     return build_capabilities(
-        openai_configured=bool(os.getenv("OPENAI_API_KEY")),
-        tmdb_configured=bool(os.getenv("TMDB_API_KEY")),
+        openai_configured=provider_api_key("OPENAI_API_KEY") is not None,
+        tmdb_configured=provider_api_key("TMDB_API_KEY") is not None,
     )
 
 
@@ -559,7 +567,7 @@ def presets() -> dict[str, list[str]]:
 
 @app.post("/prompt-drafts", response_model=PromptDraftResponse)
 def create_prompt_draft(payload: PromptDraftRequest) -> PromptDraftResponse:
-    openai_api_key = os.getenv("OPENAI_API_KEY")
+    openai_api_key = provider_api_key("OPENAI_API_KEY")
     draft = draft_prompt_to_tierlist(
         payload.prompt,
         cache_dir=PROMPT_DRAFT_CACHE_DIR,
@@ -586,7 +594,7 @@ def create_prompt_draft(payload: PromptDraftRequest) -> PromptDraftResponse:
         )
 
     suggested_mode = draft.suggested_enrichment_mode
-    if suggested_mode == "tmdb_movie" and not os.getenv("TMDB_API_KEY"):
+    if suggested_mode == "tmdb_movie" and provider_api_key("TMDB_API_KEY") is None:
         suggested_mode = "text"
         warnings.append(make_warning("tmdb_unconfigured_text_fallback"))
 
@@ -706,7 +714,7 @@ def _build_pack(
             detail=f"List too large; maximum is {MAX_LIST_ITEMS} items.",
         )
     if payload.enrichment_mode == "auto":
-        openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai_api_key = provider_api_key("OPENAI_API_KEY")
         planning_text = (
             "\n".join(item.name for item in source_items)
             if has_structured_items
@@ -808,7 +816,7 @@ def _build_pack(
         if override.action == "text"
     }
     if enrichment_mode == "tmdb_movie":
-        api_key = os.getenv("TMDB_API_KEY")
+        api_key = provider_api_key("TMDB_API_KEY")
         if api_key:
             try:
                 if progress_callback:

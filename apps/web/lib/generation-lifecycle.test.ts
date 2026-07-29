@@ -873,3 +873,56 @@ test("accepts only the canonical null shape for an unknown lost job", () => {
     ClientContractError,
   );
 });
+
+test("accepts only null or absolute HTTP(S) item source URLs", async (t) => {
+  const makeJobWithSourceUrl = (sourceUrl: string | null): GenerationJob => {
+    const filename = "alpha.png";
+    const pack = makePack({
+      item_count: 1,
+      items: [
+        {
+          id: "alpha",
+          name: "Alpha",
+          filename,
+          image_url: `/packs/pack-1/files/${filename}`,
+          asset_kind: "image",
+          source_type: "provider",
+          source_value: "provider-reference",
+          source_url: sourceUrl,
+          confidence: 0.9,
+        },
+      ],
+    });
+    return makeJob("completed", {
+      pack,
+      pack_status: "completed",
+    });
+  };
+
+  for (const sourceUrl of [
+    null,
+    "http://images.example.test/alpha.png",
+    "https://cdn.example.test/assets/alpha.png?size=large",
+  ]) {
+    await t.test(`accepts ${String(sourceUrl)}`, () => {
+      const job = makeJobWithSourceUrl(sourceUrl);
+      assert.deepEqual(parseGenerationJob(job, "job-1"), job);
+    });
+  }
+
+  for (const sourceUrl of [
+    "javascript:alert(1)",
+    "data:image/png;base64,AAAA",
+    "/relative/alpha.png",
+    "alpha.png",
+    "https://",
+    "http:/missing-slash.example/alpha.png",
+  ]) {
+    await t.test(`rejects ${sourceUrl}`, () => {
+      assert.throws(
+        () => parseGenerationJob(makeJobWithSourceUrl(sourceUrl), "job-1"),
+        ClientContractError,
+      );
+    });
+  }
+});

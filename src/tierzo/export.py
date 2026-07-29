@@ -4,9 +4,9 @@ import json
 import zipfile
 from pathlib import Path
 
-from .filenames import image_filename
+from .filenames import unique_image_filename
 from .enrichers import EnrichedAsset
-from .models import PackItem, PackManifest
+from .models import PackItem, PackManifest, SourceItem, source_items_from_strings
 from .presets import TextCardPreset
 from .rendering import draw_centered_text, draw_image_card
 
@@ -23,14 +23,61 @@ def generate_pack(
     extra_manifest: dict[str, object] | None = None,
     enriched_assets: dict[str, EnrichedAsset] | None = None,
 ) -> PackManifest:
+    source_items = source_items_from_strings(values)
+    assets_by_id = {
+        item.id: enriched_assets[item.name]
+        for item in source_items
+        if enriched_assets and item.name in enriched_assets
+    }
+    return generate_pack_from_items(
+        source_items,
+        output_dir,
+        title=title,
+        size=size,
+        preset=preset,
+        filename_mode=filename_mode,
+        write_manifest=write_manifest,
+        extra_manifest=extra_manifest,
+        enriched_assets=assets_by_id,
+    )
+
+
+def generate_pack_from_items(
+    items_to_generate: list[SourceItem],
+    output_dir: Path,
+    *,
+    title: str,
+    size: int,
+    preset: TextCardPreset,
+    filename_mode: str,
+    write_manifest: bool,
+    extra_manifest: dict[str, object] | None = None,
+    enriched_assets: dict[str, EnrichedAsset] | None = None,
+) -> PackManifest:
+    item_ids = [item.id for item in items_to_generate]
+    if any(not item_id.strip() for item_id in item_ids):
+        raise ValueError("source item IDs cannot be blank")
+    if len(item_ids) != len(set(item_ids)):
+        raise ValueError("source item IDs must be unique")
+    if any(not item.name.strip() for item in items_to_generate):
+        raise ValueError("source item names cannot be blank")
+
     output_dir.mkdir(parents=True, exist_ok=True)
 
     items: list[PackItem] = []
-    total = len(values)
-    for index, text in enumerate(values, start=1):
-        filename = image_filename(index, total, text, filename_mode)
+    total = len(items_to_generate)
+    used_filenames: set[str] = set()
+    for index, source_item in enumerate(items_to_generate, start=1):
+        text = source_item.name
+        filename = unique_image_filename(
+            index,
+            total,
+            text,
+            filename_mode,
+            used_filenames,
+        )
         output_path = output_dir / filename
-        enriched_asset = (enriched_assets or {}).get(text)
+        enriched_asset = (enriched_assets or {}).get(source_item.id)
         if enriched_asset:
             draw_image_card(
                 enriched_asset.image_path,
@@ -48,7 +95,7 @@ def generate_pack(
 
         items.append(
             PackItem(
-                id=f"{index:03d}",
+                id=source_item.id,
                 name=text,
                 filename=filename,
                 status="ready",

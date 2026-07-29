@@ -117,6 +117,10 @@ Browser file input restrictions may limit true one-click upload, so the extensio
 
 ## Data Model Sketch
 
+Item IDs are workspace-scoped, opaque identities that survive regeneration;
+see [Item Identity And Reconciliation](IDENTITY.md) for compatibility and
+migration semantics.
+
 ```json
 {
   "pack": {

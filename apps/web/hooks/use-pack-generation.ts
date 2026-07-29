@@ -95,18 +95,15 @@ export function usePackGeneration({
   }
 
   function updateMatchOverride(
-    itemName: string,
-    action: "keep" | "text" | "image_url",
-    value?: string,
+    itemId: string,
+    action: "keep" | "text",
   ) {
     setMatchOverrides((current) => {
       const next = { ...current };
       if (action === "keep") {
-        delete next[itemName];
-      } else if (action === "text") {
-        next[itemName] = "text";
-      } else if (value?.trim()) {
-        next[itemName] = `image_url:${value.trim()}`;
+        delete next[itemId];
+      } else {
+        next[itemId] = { action: "text" };
       }
       return next;
     });
@@ -114,6 +111,15 @@ export function usePackGeneration({
 
   function applyMatchOverrides() {
     void generatePack(matchOverrides);
+  }
+
+  function retainMatchOverrides(itemIds: string[]) {
+    const validIds = new Set(itemIds);
+    setMatchOverrides((current) =>
+      Object.fromEntries(
+        Object.entries(current).filter(([itemId]) => validIds.has(itemId)),
+      ),
+    );
   }
 
   return {
@@ -124,6 +130,7 @@ export function usePackGeneration({
     isGenerating,
     matchOverrides,
     pack,
+    retainMatchOverrides,
     setError,
     setPack,
     setShowMatches,

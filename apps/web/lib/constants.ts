@@ -162,8 +162,6 @@ export const DEFAULT_TIERS = [
   { id: "tier-d", label: "D" },
 ];
 
-export const BOARD_STORAGE_KEY = "tierzo.editor.v2";
-
 export const TIER_COLORS = [
   "#ff747a",
   "#ffc07a",

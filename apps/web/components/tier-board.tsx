@@ -3,9 +3,12 @@
 import type { MouseEvent } from "react";
 
 import { Card } from "./tier-card";
-import type { PackItem, RowMenu, TierRow } from "../lib/types";
-
-type BoardState = Record<string, PackItem[]>;
+import type {
+  PackItem,
+  ResolvedBoardState,
+  RowMenu,
+  TierRow,
+} from "../lib/types";
 
 export function TierBoard({
   benchItems,
@@ -32,7 +35,7 @@ export function TierBoard({
   tiers,
 }: {
   benchItems: PackItem[];
-  board: BoardState;
+  board: ResolvedBoardState;
   deleteSelectedTier: () => void;
   dragOverItemId: string | null;
   dragOverTierId: string | null;
@@ -81,8 +84,11 @@ export function TierBoard({
             }
             onDrop={(event) => {
               event.preventDefault();
-              if (draggedItemId) {
-                moveItemToTier(draggedItemId, tier.id);
+              const droppedItemId =
+                draggedItemId ||
+                event.dataTransfer.getData("application/x-tierzo-item-id");
+              if (droppedItemId) {
+                moveItemToTier(droppedItemId, tier.id);
                 return;
               }
               moveDraggedTier(tier.id);
@@ -143,8 +149,13 @@ export function TierBoard({
                   onDrop={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
-                    if (draggedItemId) {
-                      moveItemToTier(draggedItemId, tier.id, item.id);
+                    const droppedItemId =
+                      draggedItemId ||
+                      event.dataTransfer.getData(
+                        "application/x-tierzo-item-id",
+                      );
+                    if (droppedItemId) {
+                      moveItemToTier(droppedItemId, tier.id, item.id);
                     }
                   }}
                   onDragOver={(event) => {
@@ -173,8 +184,11 @@ export function TierBoard({
           }}
           onDrop={(event) => {
             event.preventDefault();
-            if (draggedItemId) {
-              moveItemToBench(draggedItemId);
+            const droppedItemId =
+              draggedItemId ||
+              event.dataTransfer.getData("application/x-tierzo-item-id");
+            if (droppedItemId) {
+              moveItemToBench(droppedItemId);
             }
           }}
         >
@@ -192,8 +206,13 @@ export function TierBoard({
                 onDrop={(event) => {
                   event.preventDefault();
                   event.stopPropagation();
-                  if (draggedItemId) {
-                    moveItemToBench(draggedItemId);
+                  const droppedItemId =
+                    draggedItemId ||
+                    event.dataTransfer.getData(
+                      "application/x-tierzo-item-id",
+                    );
+                  if (droppedItemId) {
+                    moveItemToBench(droppedItemId);
                   }
                 }}
                 onDragOver={(event) => {

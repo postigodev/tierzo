@@ -104,7 +104,7 @@ Example fields:
       "estimated_bytes": 120000,
       "images": [
         {
-          "id": "001",
+          "id": "item-550e8400-e29b-41d4-a716-446655440000",
           "name": "Silent Hill 2",
           "filename": "001-silent-hill-2.png",
           "url": "http://localhost:8000/packs/abc123/files/001-silent-hill-2.png",

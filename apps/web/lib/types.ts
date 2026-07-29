@@ -10,6 +10,13 @@ export type PackItem = {
   confidence: number | null;
 };
 
+export type SourceItemId = string;
+
+export type SourceItem = {
+  id: SourceItemId;
+  name: string;
+};
+
 export type PackResponse = {
   pack_id: string;
   title: string;
@@ -45,7 +52,11 @@ export type GenerationJob = {
   error: string | null;
 };
 
-export type MatchOverrides = Record<string, "text" | `image_url:${string}`>;
+export type ItemAssetOverride = {
+  action: "text";
+};
+
+export type MatchOverrides = Record<SourceItemId, ItemAssetOverride>;
 
 export type PromptDraftResponse = {
   title: string;
@@ -85,16 +96,36 @@ export type RowMenu = {
   y: number;
 } | null;
 
-export type BoardState = Record<string, PackItem[]>;
+export type BoardState = Record<string, SourceItemId[]>;
+export type ResolvedBoardState = Record<string, PackItem[]>;
 
-export type SavedDemoState = {
+export type SavedWorkspaceState = {
+  version: 3;
+  sourceItems: SourceItem[];
   text: string;
   title: string;
   description: string;
   preset: string;
-  cardStyle: CardStyle;
+  cardStyle: CardStyle | null;
   enrichmentMode: string;
   tiers: TierRow[];
   board: BoardState;
   pack: PackResponse | null;
+  migrationWarnings: string[];
 };
+
+export type LegacyBoardState = Record<string, PackItem[]>;
+
+export type LegacySavedDemoState = {
+  text?: string;
+  title?: string;
+  description?: string;
+  preset?: string;
+  cardStyle?: CardStyle | null;
+  enrichmentMode?: string;
+  tiers?: TierRow[];
+  board?: LegacyBoardState;
+  pack?: PackResponse | null;
+};
+
+export type SavedDemoState = SavedWorkspaceState;

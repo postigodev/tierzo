@@ -6,18 +6,19 @@ import uuid
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable
+from typing import Callable, Literal
 
 import httpx
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from tierzo.agentic import IntakePlan, draft_prompt_to_tierlist, plan_intake
-from tierzo.export import generate_pack, zip_pack
+from tierzo.export import generate_pack_from_items, zip_pack
 from tierzo.enrichers import EnrichedAsset, TmdbMovieEnricher
-from tierzo.parsers import parse_text_lines
+from tierzo.models import SourceItem, source_items_from_strings
+from tierzo.parsers import normalize_text, parse_text_lines
 from tierzo.presets import PRESETS, TextCardPreset, get_preset
 
 
@@ -124,11 +125,28 @@ class CardStyleRequest(BaseModel):
     image_label_position: str = Field(default="none", pattern=r"^(none|top|bottom|overlay)$")
 
 
+class SourceItemRequest(BaseModel):
+    id: str = Field(
+        min_length=1,
+        max_length=64,
+        pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
+    )
+    name: str = Field(min_length=1, max_length=200)
+
+
+class ItemAssetOverrideRequest(BaseModel):
+    action: Literal["text"]
+
+
 class GeneratePackRequest(BaseModel):
-    text: str = Field(min_length=1, max_length=MAX_TEXT_LENGTH)
+    text: str | None = Field(default=None, min_length=1, max_length=MAX_TEXT_LENGTH)
+    items: list[SourceItemRequest] | None = Field(
+        default=None,
+        max_length=MAX_LIST_ITEMS,
+    )
     preset: str = "arcade"
     size: int = Field(default=512, ge=256, le=1536)
-    filename_mode: str = "both"
+    filename_mode: Literal["index", "slug", "both"] = "both"
     title: str = "Tierzo Demo Pack"
     description: str | None = None
     row_labels: list[str] = Field(
@@ -140,6 +158,33 @@ class GeneratePackRequest(BaseModel):
     enrichment_mode: str = "text"
     agent_cache_refresh: bool = False
     asset_overrides: dict[str, str] = Field(default_factory=dict)
+    item_asset_overrides: dict[str, ItemAssetOverrideRequest] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_input_contract(self) -> GeneratePackRequest:
+        has_text = self.text is not None
+        has_items = self.items is not None
+        if has_text == has_items:
+            raise ValueError("Provide exactly one of text or items.")
+
+        if has_items:
+            assert self.items is not None
+            if not self.items:
+                raise ValueError("Structured items cannot be empty.")
+            ids = [item.id for item in self.items]
+            if len(ids) != len(set(ids)):
+                raise ValueError("Structured item IDs must be unique.")
+            if any(not normalize_text(item.name) for item in self.items):
+                raise ValueError("Structured item names cannot be blank.")
+            if self.asset_overrides:
+                raise ValueError("asset_overrides is only supported with legacy text input.")
+            unknown_ids = set(self.item_asset_overrides) - set(ids)
+            if unknown_ids:
+                raise ValueError("item_asset_overrides contains an unknown item ID.")
+        elif self.item_asset_overrides:
+            raise ValueError("item_asset_overrides requires structured items.")
+
+        return self
 
 
 class PromptDraftRequest(BaseModel):
@@ -392,6 +437,24 @@ def summarize_asset_step(pack: GeneratePackResponse) -> tuple[str, str | None]:
 ProgressCallback = Callable[[str, str | None], None]
 
 
+def legacy_source_items(values: list[str]) -> list[SourceItem]:
+    return source_items_from_strings(values)
+
+
+def source_items_from_payload(payload: GeneratePackRequest) -> tuple[list[SourceItem], bool]:
+    if payload.items is not None:
+        return (
+            [
+                SourceItem(id=item.id, name=normalize_text(item.name))
+                for item in payload.items
+            ],
+            True,
+        )
+
+    assert payload.text is not None
+    return legacy_source_items(parse_text_lines(payload.text)), False
+
+
 def build_pack(
     payload: GeneratePackRequest,
     progress_callback: ProgressCallback | None = None,
@@ -399,26 +462,38 @@ def build_pack(
     agent_plan: IntakePlan | None = None
     enrichment_mode = payload.enrichment_mode
     cleanup_expired_storage()
-    values = parse_text_lines(payload.text)
-    if len(values) > MAX_LIST_ITEMS:
+    source_items, has_structured_items = source_items_from_payload(payload)
+    if len(source_items) > MAX_LIST_ITEMS:
         raise HTTPException(
             status_code=413,
             detail=f"List too large; maximum is {MAX_LIST_ITEMS} items.",
         )
     if payload.enrichment_mode == "auto":
+        planning_text = (
+            "\n".join(item.name for item in source_items)
+            if has_structured_items
+            else payload.text
+        )
+        assert planning_text is not None
         agent_plan = plan_intake(
-            payload.text,
+            planning_text,
             cache_dir=AGENT_CACHE_DIR,
             openai_api_key=os.getenv("OPENAI_API_KEY"),
             force_refresh=payload.agent_cache_refresh,
         )
-        values = agent_plan.items
+        if not has_structured_items:
+            source_items = legacy_source_items(agent_plan.items)
         enrichment_mode = agent_plan.tool
         if progress_callback:
             source = "cache" if agent_plan.cache_hit else agent_plan.source
             progress_callback("plan_done", f"Picked {agent_plan.domain} via {source}.")
 
-    if not values:
+    if len(source_items) > MAX_LIST_ITEMS:
+        raise HTTPException(
+            status_code=413,
+            detail=f"List too large; maximum is {MAX_LIST_ITEMS} items.",
+        )
+    if not source_items:
         raise HTTPException(status_code=400, detail="No non-empty items found.")
 
     try:
@@ -456,7 +531,7 @@ def build_pack(
     if output_dir.exists():
         shutil.rmtree(output_dir)
 
-    enriched_assets = None
+    enriched_assets: dict[str, EnrichedAsset] | None = None
     enrichment_status = "text"
     force_text_values = {
         name
@@ -472,22 +547,34 @@ def build_pack(
         if ALLOW_MANUAL_IMAGE_URLS
         else {}
     )
+    force_text_item_ids = {
+        item_id
+        for item_id, override in payload.item_asset_overrides.items()
+        if override.action == "text"
+    }
     if enrichment_mode == "tmdb_movie":
         api_key = os.getenv("TMDB_API_KEY")
         if api_key:
             try:
                 if progress_callback:
-                    progress_callback("assets_running", f"Searching posters for {len(values)} items.")
-                enriched_assets = TmdbMovieEnricher(api_key).enrich_many(values, output_dir / "_sources")
-                for value in force_text_values:
-                    if enriched_assets:
-                        enriched_assets.pop(value, None)
-                enriched_assets = apply_manual_image_overrides(
-                    enriched_assets or {},
+                    progress_callback("assets_running", f"Searching posters for {len(source_items)} items.")
+                named_assets = TmdbMovieEnricher(api_key).enrich_many(
+                    [item.name for item in source_items],
+                    output_dir / "_sources",
+                )
+                named_assets = apply_manual_image_overrides(
+                    named_assets,
                     manual_image_urls,
                     output_dir / "_manual_sources",
                 )
-                enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(values)}"
+                enriched_assets = {
+                    item.id: named_assets[item.name]
+                    for item in source_items
+                    if item.name in named_assets
+                    and item.name not in force_text_values
+                    and item.id not in force_text_item_ids
+                }
+                enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(source_items)}"
             except Exception:
                 enriched_assets = None
                 enrichment_status = "tmdb_movie:error_fallback_text"
@@ -500,7 +587,7 @@ def build_pack(
                 title=payload.title,
                 description=payload.description,
                 row_labels=payload.row_labels,
-                item_count=len(values),
+                item_count=len(source_items),
                 items=[],
                 manifest_url="",
                 zip_url="",
@@ -512,17 +599,22 @@ def build_pack(
         progress_callback(f"assets_{asset_status}", asset_detail)
 
     if enrichment_mode != "tmdb_movie" and manual_image_urls:
-        enriched_assets = apply_manual_image_overrides(
-            enriched_assets or {},
+        named_assets = apply_manual_image_overrides(
+            {},
             manual_image_urls,
             output_dir / "_manual_sources",
         )
-        enrichment_status = f"manual_image:{len(enriched_assets)}/{len(values)}"
+        enriched_assets = {
+            item.id: named_assets[item.name]
+            for item in source_items
+            if item.name in named_assets
+        }
+        enrichment_status = f"manual_image:{len(enriched_assets)}/{len(source_items)}"
 
     if progress_callback:
-        progress_callback("render_running", f"Rendering {len(values)} cards.")
-    manifest = generate_pack(
-        values,
+        progress_callback("render_running", f"Rendering {len(source_items)} cards.")
+    manifest = generate_pack_from_items(
+        source_items,
         output_dir,
         title=payload.title,
         size=payload.size,
@@ -539,6 +631,10 @@ def build_pack(
                 "status": enrichment_status,
                 "agent_plan": agent_plan.to_dict() if agent_plan else None,
                 "asset_overrides": payload.asset_overrides,
+                "item_asset_overrides": {
+                    item_id: override.model_dump()
+                    for item_id, override in payload.item_asset_overrides.items()
+                },
             },
             "card_style": {
                 "preset": payload.preset,
@@ -641,11 +737,11 @@ def run_generation_job(job_id: str, payload: GeneratePackRequest) -> None:
     update_job_step(job, "read", "running")
 
     try:
-        values = parse_text_lines(payload.text)
-        if not values:
+        source_items, _ = source_items_from_payload(payload)
+        if not source_items:
             raise HTTPException(status_code=400, detail="No non-empty items found.")
 
-        update_job_step(job, "read", "done", f"Found {len(values)} source items.")
+        update_job_step(job, "read", "done", f"Found {len(source_items)} source items.")
         update_job_step(job, "plan", "running")
 
         if payload.enrichment_mode != "auto":

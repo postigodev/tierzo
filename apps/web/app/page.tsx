@@ -10,7 +10,6 @@ import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
 import {
   BASE_CARD_STYLE,
-  BOARD_STORAGE_KEY,
   DEFAULT_TIERS,
   FONT_OPTIONS,
   FONT_STACKS,
@@ -21,13 +20,25 @@ import {
   SAMPLE_LIST,
 } from "../lib/constants";
 import { renderBoardPng, slugify } from "../lib/export-board-png";
+import { reconcileBoard } from "../lib/board-reconciliation";
+import {
+  parseSourceText,
+  reconcileSourceItems,
+  sourceItemsToText,
+} from "../lib/source-items";
 import { hexToRgba, textDecoration } from "../lib/style-utils";
 import type {
   CardStyle,
   MatchOverrides,
   PromptDraftResponse,
-  SavedDemoState,
+  SavedWorkspaceState,
+  SourceItem,
 } from "../lib/types";
+import {
+  LEGACY_WORKSPACE_STORAGE_KEY,
+  migrateWorkspaceState,
+  WORKSPACE_STORAGE_KEY,
+} from "../lib/workspace-migration";
 
 function resolveSavedCardStyle(
   savedStyle?: (CardStyle & { fontFamily?: string }) | null,
@@ -62,39 +73,50 @@ function resolveSavedCardStyle(
   };
 }
 
-function loadSavedDemoState() {
+function loadSavedWorkspaceState() {
   if (typeof window === "undefined") {
-    return null;
+    return migrateWorkspaceState(null).state;
   }
 
-  const saved = window.localStorage.getItem(BOARD_STORAGE_KEY);
-  if (!saved) {
-    return null;
+  for (const key of [WORKSPACE_STORAGE_KEY, LEGACY_WORKSPACE_STORAGE_KEY]) {
+    const saved = window.localStorage.getItem(key);
+    if (!saved) {
+      continue;
+    }
+    try {
+      return migrateWorkspaceState(JSON.parse(saved)).state;
+    } catch {
+      continue;
+    }
   }
-
-  try {
-    return JSON.parse(saved) as SavedDemoState;
-  } catch {
-    window.localStorage.removeItem(BOARD_STORAGE_KEY);
-    return null;
-  }
+  return migrateWorkspaceState(null).state;
 }
 
 export default function Home() {
-  const savedState = useMemo(() => loadSavedDemoState(), []);
-  const [text, setText] = useState(() => savedState?.text ?? SAMPLE_LIST);
-  const [title, setTitle] = useState(() => savedState?.title ?? "");
-  const [description, setDescription] = useState(() => savedState?.description ?? "");
-  const [preset, setPreset] = useState(() => savedState?.preset ?? "arcade");
+  const savedState = useMemo(() => loadSavedWorkspaceState(), []);
+  const initialText = savedState.text || SAMPLE_LIST;
+  const [sourceItems, setSourceItems] = useState<SourceItem[]>(
+    () =>
+      savedState.sourceItems.length > 0
+        ? savedState.sourceItems
+        : reconcileSourceItems([], parseSourceText(initialText)).items,
+  );
+  const [text, setText] = useState(() => initialText);
+  const [title, setTitle] = useState(() => savedState.title);
+  const [description, setDescription] = useState(() => savedState.description);
+  const [preset, setPreset] = useState(() => savedState.preset);
   const [enrichmentMode, setEnrichmentMode] = useState(
-    () => savedState?.enrichmentMode ?? "auto",
+    () => savedState.enrichmentMode,
+  );
+  const [identityNotice, setIdentityNotice] = useState<string | null>(
+    savedState.migrationWarnings[0] ?? null,
   );
   const [promptText, setPromptText] = useState("");
   const [promptDraft, setPromptDraft] = useState<PromptDraftResponse | null>(null);
   const [promptError, setPromptError] = useState<string | null>(null);
   const [isDraftingPrompt, setIsDraftingPrompt] = useState(false);
   const [cardStyle, setCardStyle] = useState<CardStyle>(() =>
-    resolveSavedCardStyle(savedState?.cardStyle),
+    resolveSavedCardStyle(savedState.cardStyle),
   );
   const [isExporting, setIsExporting] = useState(false);
   const deferredText = useDeferredValue(text);
@@ -110,10 +132,11 @@ export default function Home() {
     setPack,
     setShowMatches,
     showMatches,
+    retainMatchOverrides,
     updateMatchOverride,
   } = usePackGeneration({
     buildPayload: buildGeneratePayload,
-    initialPack: savedState?.pack ?? null,
+    initialPack: savedState.pack,
     shouldShowMatchesOnGenerate: () => canReviewMatches,
   });
   const {
@@ -129,6 +152,7 @@ export default function Home() {
     moveItemToBench,
     moveItemToTier,
     openRowMenu,
+    resolvedBoard,
     rowMenu,
     selectedTierId,
     setBoard,
@@ -141,16 +165,21 @@ export default function Home() {
     updateTierLabel,
     deleteSelectedTier,
   } = useTierBoard({
-    initialBoard: savedState?.board,
-    initialSelectedTierId: savedState?.tiers?.[0]?.id,
+    initialBoard: savedState.board,
+    initialSelectedTierId: savedState.tiers[0]?.id,
     initialTiers:
-      savedState?.tiers?.slice(0, MAX_TIERS).filter(Boolean) || DEFAULT_TIERS,
+      savedState.tiers.slice(0, MAX_TIERS).filter(Boolean).length > 0
+        ? savedState.tiers.slice(0, MAX_TIERS).filter(Boolean)
+        : DEFAULT_TIERS,
     maxTiers: MAX_TIERS,
     packItems: pack?.items ?? [],
+    sourceItemIds: sourceItems.map((item) => item.id),
   });
 
   useEffect(() => {
-    const nextState: SavedDemoState = {
+    const nextState: SavedWorkspaceState = {
+      version: 3,
+      sourceItems,
       text,
       title,
       description,
@@ -160,15 +189,21 @@ export default function Home() {
       tiers,
       board,
       pack,
+      migrationWarnings: identityNotice ? [identityNotice] : [],
     };
-    window.localStorage.setItem(BOARD_STORAGE_KEY, JSON.stringify(nextState));
+    window.localStorage.setItem(
+      WORKSPACE_STORAGE_KEY,
+      JSON.stringify(nextState),
+    );
   }, [
     board,
     cardStyle,
     description,
     enrichmentMode,
+    identityNotice,
     pack,
     preset,
+    sourceItems,
     text,
     tiers,
     title,
@@ -191,7 +226,7 @@ export default function Home() {
 
   function buildGeneratePayload(overrides: MatchOverrides = {}) {
     return {
-      text,
+      items: sourceItems,
       preset,
       size: 512,
       filename_mode: "both",
@@ -199,7 +234,7 @@ export default function Home() {
       description: description.trim() || null,
       row_labels: tiers.map((tier) => tier.label.trim() || "-"),
       enrichment_mode: enrichmentMode,
-      asset_overrides: overrides,
+      item_asset_overrides: overrides,
       custom_preset: {
         background: cardStyle.background,
         text_color: cardStyle.textColor,
@@ -225,7 +260,46 @@ export default function Home() {
       return;
     }
 
-    setBoard({});
+    setBoard((current) =>
+      reconcileBoard(
+        current,
+        nextPack.items.map((item) => item.id),
+      ).board,
+    );
+  }
+
+  function updateSourceText(nextText: string) {
+    const reconciliation = reconcileSourceItems(
+      sourceItems,
+      parseSourceText(nextText),
+    );
+    setText(nextText);
+    setSourceItems(reconciliation.items);
+    retainMatchOverrides(reconciliation.items.map((item) => item.id));
+    const boardResult = reconcileBoard(
+      board,
+      reconciliation.items.map((item) => item.id),
+    );
+    setBoard(boardResult.board);
+
+    if (reconciliation.ambiguousReplacementCount > 0) {
+      setIdentityNotice(
+        "Some simultaneous line replacements were ambiguous, so Tierzo assigned new item identities.",
+      );
+    } else if (reconciliation.renames.length > 0) {
+      const rename = reconciliation.renames[0];
+      setIdentityNotice(
+        `Treated “${rename.from}” → “${rename.to}” as a rename and preserved its ranking.`,
+      );
+    } else if (boardResult.removedRankedIds.length > 0) {
+      setIdentityNotice(
+        `${boardResult.removedRankedIds.length} ranked item${
+          boardResult.removedRankedIds.length === 1 ? " was" : "s were"
+        } removed from the source list.`,
+      );
+    } else {
+      setIdentityNotice(null);
+    }
   }
 
   function applyMatchOverrides() {
@@ -267,10 +341,14 @@ export default function Home() {
       setPromptDraft(draft);
       setTitle(draft.title);
       setDescription(draft.description ?? "");
-      setText(draft.items.join("\n"));
+      const draftedItems = reconcileSourceItems([], draft.items).items;
+      setSourceItems(draftedItems);
+      setText(sourceItemsToText(draftedItems));
       setEnrichmentMode(draft.suggested_enrichment_mode);
       setBoard({});
       setPack(null);
+      retainMatchOverrides([]);
+      setIdentityNotice(null);
       setShowMatches(false);
     } catch (caught) {
       setPromptError(
@@ -325,7 +403,7 @@ export default function Home() {
       const dataUrl = await renderBoardPng({
         title: title.trim() || pack.title,
         tiers,
-        board,
+        board: resolvedBoard,
       });
       const link = document.createElement("a");
       link.href = dataUrl;
@@ -407,7 +485,7 @@ export default function Home() {
 
         <TierBoard
           benchItems={benchItems}
-          board={board}
+          board={resolvedBoard}
           deleteSelectedTier={deleteSelectedTier}
           dragOverItemId={dragOverItemId}
           dragOverTierId={dragOverTierId}
@@ -441,6 +519,7 @@ export default function Home() {
           isGenerating={isGenerating}
           isDraftingPrompt={isDraftingPrompt}
           itemCount={itemCount}
+          identityNotice={identityNotice}
           matchOverrides={matchOverrides}
           onApplyMatchOverrides={applyMatchOverrides}
           onDraftFromPrompt={() => void handleDraftFromPrompt()}
@@ -454,7 +533,7 @@ export default function Home() {
             setPromptText(nextPrompt);
           }}
           onSetShowMatches={setShowMatches}
-          onSetText={setText}
+          onSetText={updateSourceText}
           onUpdateCardStyle={updateCardStyle}
           onUpdateMatchOverride={updateMatchOverride}
           pack={pack}

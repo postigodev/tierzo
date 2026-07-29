@@ -10,7 +10,8 @@
     "web:dev": "corepack pnpm dev:web",
     "build": "corepack pnpm --filter @tierzo/web build",
     "lint": "corepack pnpm --filter @tierzo/web lint",
-    "test": "node scripts/python.mjs -m unittest discover -s tests",
+    "test": "node scripts/python.mjs -m unittest discover -s tests && corepack pnpm --filter @tierzo/web test:state",
+    "test:web-state": "corepack pnpm --filter @tierzo/web test:state",
     "verify": "corepack pnpm test && corepack pnpm lint && corepack pnpm build",
     "demo:verify": "corepack pnpm --filter @tierzo/web verify:demo"
   }

@@ -1,13 +1,13 @@
 import { apiUrl } from "./api";
 import { TIER_COLORS } from "./constants";
-import type { BoardState, TierRow } from "./types";
+import type { ResolvedBoardState, TierRow } from "./types";
 
 export async function renderBoardPng({
   board,
   tiers,
   title,
 }: {
-  board: BoardState;
+  board: ResolvedBoardState;
   tiers: TierRow[];
   title: string;
 }) {

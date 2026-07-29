@@ -11,6 +11,112 @@ const DEFAULT_POLL_TIMEOUT_MS = 60_000;
 const INITIAL_POLL_INTERVAL_MS = 500;
 const MAX_POLL_INTERVAL_MS = 2_000;
 
+export class ClientContractError extends Error {
+  override readonly name = "ClientContractError";
+
+  constructor(message = "Tierzo received an invalid generation response.") {
+    super(message);
+  }
+}
+
+export type CreateJobResponse = {
+  job_id: string;
+  status: "pending";
+};
+
+export type CompletedJobArtifacts =
+  | { status: "completed"; pack: PackResponse }
+  | { status: "expired" | "lost"; pack: null };
+
+export function parseCreateJobResponse(value: unknown): CreateJobResponse {
+  const record = requireRecord(value);
+  if (!isNonEmptyString(record.job_id) || record.status !== "pending") {
+    throw new ClientContractError();
+  }
+  return {
+    job_id: record.job_id,
+    status: record.status,
+  };
+}
+
+export function parseGenerationJob(
+  value: unknown,
+  expectedJobId: string,
+): GenerationJob {
+  const job = requireRecord(value);
+  if (
+    !isNonEmptyString(expectedJobId) ||
+    job.job_id !== expectedJobId ||
+    !isJobStatus(job.status) ||
+    !Array.isArray(job.steps) ||
+    !job.steps.every(isJobStep) ||
+    !isNullableString(job.error)
+  ) {
+    throw new ClientContractError();
+  }
+
+  if (job.status === "lost") {
+    if (
+      job.created_at !== null ||
+      job.updated_at !== null ||
+      job.steps.length !== 0 ||
+      job.pack !== null ||
+      job.pack_status !== null ||
+      job.error !== null
+    ) {
+      throw new ClientContractError();
+    }
+    return job as GenerationJob;
+  }
+
+  const createdAt = parseTrustedUtcTimestamp(
+    typeof job.created_at === "string" ? job.created_at : null,
+  );
+  const updatedAt = parseTrustedUtcTimestamp(
+    typeof job.updated_at === "string" ? job.updated_at : null,
+  );
+  if (
+    createdAt === null ||
+    updatedAt === null ||
+    createdAt > updatedAt
+  ) {
+    throw new ClientContractError();
+  }
+
+  if (job.status === "completed") {
+    if (
+      !isPackLifecycleStatus(job.pack_status) ||
+      !isCanonicalPack(job.pack) ||
+      job.error !== null
+    ) {
+      throw new ClientContractError();
+    }
+  } else if (
+    job.pack !== null ||
+    job.pack_status !== null ||
+    (job.status !== "failed" && job.error !== null)
+  ) {
+    throw new ClientContractError();
+  }
+
+  return job as GenerationJob;
+}
+
+export function resolveCompletedJobArtifacts(
+  job: GenerationJob,
+): CompletedJobArtifacts {
+  if (job.status !== "completed" || job.pack === null) {
+    throw new ClientContractError();
+  }
+  if (job.pack_status === "expired" || job.pack_status === "lost") {
+    return { status: job.pack_status, pack: null };
+  }
+  if (job.pack_status !== "completed") {
+    throw new ClientContractError();
+  }
+  return { status: "completed", pack: job.pack };
+}
+
 export type LatestRequestGuard = {
   begin: () => number;
   invalidate: () => void;
@@ -321,6 +427,164 @@ function daysInMonth(year: number, month: number): number {
   return month === 4 || month === 6 || month === 9 || month === 11
     ? 30
     : 31;
+}
+
+function requireRecord(value: unknown): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new ClientContractError();
+  }
+  return value as Record<string, unknown>;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isNullableString(value: unknown): value is string | null {
+  return value === null || typeof value === "string";
+}
+
+function isJobStatus(value: unknown): value is GenerationJob["status"] {
+  return (
+    value === "pending" ||
+    value === "running" ||
+    value === "completed" ||
+    value === "failed" ||
+    value === "lost"
+  );
+}
+
+function isPackLifecycleStatus(
+  value: unknown,
+): value is GenerationJob["pack_status"] & string {
+  return value === "completed" || value === "expired" || value === "lost";
+}
+
+function isJobStep(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const step = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(step.id) &&
+    isNonEmptyString(step.label) &&
+    (step.status === "pending" ||
+      step.status === "running" ||
+      step.status === "done" ||
+      step.status === "warning" ||
+      step.status === "error") &&
+    isNullableString(step.detail)
+  );
+}
+
+function isCanonicalPack(value: unknown): value is PackResponse {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const pack = value as Record<string, unknown>;
+  const createdAt = parseTrustedUtcTimestamp(
+    typeof pack.created_at === "string" ? pack.created_at : null,
+  );
+  const expiresAt = parseTrustedUtcTimestamp(
+    typeof pack.expires_at === "string" ? pack.expires_at : null,
+  );
+  if (
+    !isSafePathSegment(pack.pack_id) ||
+    pack.status !== "completed" ||
+    createdAt === null ||
+    expiresAt === null ||
+    createdAt > expiresAt ||
+    typeof pack.title !== "string" ||
+    !isNullableString(pack.description) ||
+    !Array.isArray(pack.row_labels) ||
+    !pack.row_labels.every((label) => typeof label === "string") ||
+    !Number.isInteger(pack.item_count) ||
+    (pack.item_count as number) < 0 ||
+    !Array.isArray(pack.items) ||
+    pack.item_count !== pack.items.length ||
+    !pack.items.every(isPackItem) ||
+    pack.manifest_url !== `/packs/${pack.pack_id}/files/manifest.json` ||
+    pack.zip_url !== `/packs/${pack.pack_id}/zip` ||
+    pack.extension_url !==
+      `/packs/${pack.pack_id}/tiermaker-extension.json` ||
+    !isNonEmptyString(pack.enrichment_status) ||
+    !isAgentPlan(pack.agent_plan)
+  ) {
+    return false;
+  }
+
+  const itemIds = new Set<string>();
+  const filenames = new Set<string>();
+  for (const itemValue of pack.items) {
+    const item = itemValue as Record<string, unknown>;
+    if (
+      itemIds.has(item.id as string) ||
+      filenames.has(item.filename as string) ||
+      item.image_url !==
+        `/packs/${pack.pack_id}/files/${item.filename as string}`
+    ) {
+      return false;
+    }
+    itemIds.add(item.id as string);
+    filenames.add(item.filename as string);
+  }
+  return true;
+}
+
+function isPackItem(value: unknown): boolean {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    return false;
+  }
+  const item = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(item.id) &&
+    isNonEmptyString(item.name) &&
+    isSafeFilename(item.filename) &&
+    typeof item.image_url === "string" &&
+    isNonEmptyString(item.asset_kind) &&
+    isNonEmptyString(item.source_type) &&
+    isNullableString(item.source_value) &&
+    isNullableString(item.source_url) &&
+    (item.confidence === null ||
+      (typeof item.confidence === "number" &&
+        Number.isFinite(item.confidence) &&
+        item.confidence >= 0 &&
+        item.confidence <= 1))
+  );
+}
+
+function isSafePathSegment(value: unknown): value is string {
+  return (
+    isNonEmptyString(value) &&
+    !value.includes("/") &&
+    !value.includes("\\") &&
+    value !== "." &&
+    value !== ".."
+  );
+}
+
+function isSafeFilename(value: unknown): value is string {
+  return isSafePathSegment(value);
+}
+
+function isAgentPlan(value: unknown): boolean {
+  if (value === null) {
+    return true;
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    return false;
+  }
+  const plan = value as Record<string, unknown>;
+  return (
+    isNonEmptyString(plan.domain) &&
+    isNonEmptyString(plan.tool) &&
+    typeof plan.confidence === "number" &&
+    Number.isFinite(plan.confidence) &&
+    plan.confidence >= 0 &&
+    plan.confidence <= 1 &&
+    isNonEmptyString(plan.source) &&
+    typeof plan.cache_hit === "boolean"
+  );
 }
 
 async function fetchBeforeDeadline({

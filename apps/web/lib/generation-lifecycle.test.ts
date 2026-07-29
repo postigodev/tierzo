@@ -3,8 +3,12 @@ import test from "node:test";
 
 import {
   canControlSavedGeneration,
+  ClientContractError,
   createLatestRequestGuard,
+  parseCreateJobResponse,
+  parseGenerationJob,
   pollGenerationJob,
+  resolveCompletedJobArtifacts,
   resolvePollingTimeout,
   RetryablePollingError,
   validateRestoredPack,
@@ -91,9 +95,9 @@ function makePack(overrides: Partial<PackResponse> = {}): PackResponse {
     row_labels: ["S"],
     item_count: 0,
     items: [],
-    manifest_url: "/packs/pack-1/manifest",
-    zip_url: "/packs/pack-1.zip",
-    extension_url: "/packs/pack-1/extension",
+    manifest_url: "/packs/pack-1/files/manifest.json",
+    zip_url: "/packs/pack-1/zip",
+    extension_url: "/packs/pack-1/tiermaker-extension.json",
     enrichment_status: "text",
     agent_plan: null,
     ...overrides,
@@ -714,4 +718,158 @@ test("offline restoration preserves the exact saved workspace", async () => {
   assert.equal(outcome.status, "validation_unavailable");
   assert.equal(outcome.pack, pack);
   assert.deepEqual(workspace, before);
+});
+
+test("completed job artifact status prevails over a retained pack snapshot", () => {
+  const pack = makePack();
+
+  assert.deepEqual(
+    resolveCompletedJobArtifacts(
+      makeJob("completed", { pack, pack_status: "completed" }),
+    ),
+    { status: "completed", pack },
+  );
+  assert.deepEqual(
+    resolveCompletedJobArtifacts(
+      makeJob("completed", { pack, pack_status: "expired" }),
+    ),
+    { status: "expired", pack: null },
+  );
+  assert.deepEqual(
+    resolveCompletedJobArtifacts(
+      makeJob("completed", { pack, pack_status: "lost" }),
+    ),
+    { status: "lost", pack: null },
+  );
+});
+
+test("validates the job creation response before use", () => {
+  assert.deepEqual(
+    parseCreateJobResponse({ job_id: "job-1", status: "pending" }),
+    { job_id: "job-1", status: "pending" },
+  );
+
+  for (const malformed of [
+    null,
+    {},
+    { job_id: "", status: "pending" },
+    { job_id: "job-1", status: "running" },
+    { job_id: 42, status: "pending" },
+  ]) {
+    assert.throws(
+      () => parseCreateJobResponse(malformed),
+      ClientContractError,
+    );
+  }
+});
+
+test("validates a canonical generation job before polling can mutate state", () => {
+  const pack = makePack({
+    item_count: 1,
+    items: [
+      {
+        id: "alpha",
+        name: "Alpha",
+        filename: "alpha.png",
+        image_url: "/packs/pack-1/files/alpha.png",
+        asset_kind: "text",
+        source_type: "text",
+        source_value: null,
+        source_url: null,
+        confidence: null,
+      },
+    ],
+  });
+  const job = makeJob("completed", {
+    steps: [
+      {
+        id: "render",
+        label: "Render cards",
+        status: "done",
+        detail: null,
+      },
+    ],
+    pack,
+    pack_status: "completed",
+  });
+
+  assert.deepEqual(parseGenerationJob(job, "job-1"), job);
+});
+
+test("rejects malformed generation jobs as client contract errors", async (t) => {
+  const pack = makePack();
+  const valid = makeJob("completed", {
+    pack,
+    pack_status: "completed",
+  });
+  const malformedCases: Array<[string, unknown]> = [
+    ["mismatched job id", { ...valid, job_id: "job-other" }],
+    ["unknown status", { ...valid, status: "expired" }],
+    ["non-UTC timestamp", { ...valid, updated_at: "2026-07-29T07:00:01-05:00" }],
+    ["missing known timestamp", { ...valid, created_at: null }],
+    ["malformed steps", { ...valid, steps: [{ id: "", label: "Render", status: "done", detail: null }] }],
+    ["unknown step status", { ...valid, steps: [{ id: "render", label: "Render", status: "complete", detail: null }] }],
+    ["missing pack status", { ...valid, pack_status: null }],
+    ["completed artifact without pack", { ...valid, pack: null }],
+    ["invalid pack timestamps", { ...valid, pack: { ...pack, expires_at: "not-a-date" } }],
+    ["item count mismatch", { ...valid, pack: { ...pack, item_count: 1 } }],
+    ["unsafe artifact URL", { ...valid, pack: { ...pack, zip_url: "javascript:alert(1)" } }],
+    ["duplicate item IDs", {
+      ...valid,
+      pack: {
+        ...pack,
+        item_count: 2,
+        items: [
+          {
+            id: "duplicate",
+            name: "One",
+            filename: "one.png",
+            image_url: "/packs/pack-1/files/one.png",
+            asset_kind: "text",
+            source_type: "text",
+            source_value: null,
+            source_url: null,
+            confidence: null,
+          },
+          {
+            id: "duplicate",
+            name: "Two",
+            filename: "two.png",
+            image_url: "/packs/pack-1/files/two.png",
+            asset_kind: "text",
+            source_type: "text",
+            source_value: null,
+            source_url: null,
+            confidence: null,
+          },
+        ],
+      },
+    }],
+  ];
+
+  for (const [name, malformed] of malformedCases) {
+    await t.test(name, () => {
+      assert.throws(
+        () => parseGenerationJob(malformed, "job-1"),
+        ClientContractError,
+      );
+    });
+  }
+});
+
+test("accepts only the canonical null shape for an unknown lost job", () => {
+  const lost = makeJob("lost", {
+    created_at: null,
+    updated_at: null,
+  });
+  assert.deepEqual(parseGenerationJob(lost, "job-1"), lost);
+
+  assert.throws(
+    () =>
+      parseGenerationJob(
+        { ...lost, created_at: "2026-07-29T12:00:00Z" },
+        "job-1",
+      ),
+    ClientContractError,
+  );
 });

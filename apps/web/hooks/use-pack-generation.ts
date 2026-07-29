@@ -2,8 +2,12 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import { apiUrl } from "../lib/api";
 import {
+  ClientContractError,
   createLatestRequestGuard,
+  parseCreateJobResponse,
+  parseGenerationJob,
   pollGenerationJob,
+  resolveCompletedJobArtifacts,
   resolvePollingTimeout,
   RetryablePollingError,
   validateRestoredPack,
@@ -48,6 +52,19 @@ function responseError(body: unknown, fallback: string): string {
     }
   }
   return fallback;
+}
+
+async function readContractJson(
+  response: Response,
+  resource: string,
+): Promise<unknown> {
+  try {
+    return await response.json();
+  } catch {
+    throw new ClientContractError(
+      `Tierzo received an invalid ${resource} response.`,
+    );
+  }
 }
 
 export function usePackGeneration({
@@ -189,7 +206,10 @@ export function usePackGeneration({
                 responseError(body, "Tierzo lost this generation job."),
               );
             }
-            const nextJob = (await response.json()) as GenerationJob;
+            const nextJob = parseGenerationJob(
+              await readContractJson(response, "generation job"),
+              nextJobId,
+            );
             if (isCurrent(token)) {
               setGenerationJob(nextJob);
             }
@@ -228,19 +248,15 @@ export function usePackGeneration({
         }
 
         setPollingState("completed");
-        if (!outcome.job.pack) {
-          if (
-            outcome.job.pack_status === "expired" ||
-            outcome.job.pack_status === "lost"
-          ) {
-            setPackState(null);
-            setArtifactState(outcome.job.pack_status);
-            setShowMatches(false);
-          }
+        const artifacts = resolveCompletedJobArtifacts(outcome.job);
+        if (artifacts.status !== "completed") {
+          setPackState(null);
+          setArtifactState(artifacts.status);
+          setShowMatches(false);
           return null;
         }
 
-        const nextPack = outcome.job.pack;
+        const nextPack = artifacts.pack;
         setPackState(nextPack);
         setArtifactState("completed");
         setShowMatches(shouldShowMatchesOnGenerate?.() ?? true);
@@ -299,10 +315,9 @@ export function usePackGeneration({
         );
       }
 
-      const createdJob = (await response.json()) as {
-        job_id: string;
-        status: GenerationJob["status"];
-      };
+      const createdJob = parseCreateJobResponse(
+        await readContractJson(response, "job creation"),
+      );
       if (!isCurrent(token)) {
         return null;
       }

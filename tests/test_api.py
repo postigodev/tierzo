@@ -7,10 +7,12 @@ from pathlib import Path
 from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+from PIL import Image
 
 sys.path.append(str(Path("apps/api").resolve()))
 
 from tierzo_api.main import app  # noqa: E402
+from tierzo.agentic import IntakePlan  # noqa: E402
 from tierzo.enrichers import EnrichedAsset  # noqa: E402
 
 
@@ -270,6 +272,219 @@ class TierzoApiTests(unittest.TestCase):
 
         manifest_body = client.get(body["manifest_url"]).json()
         self.assertEqual(manifest_body["enrichment"]["asset_overrides"], {"Alien": "text"})
+
+    def test_create_pack_from_structured_items_preserves_ids(self) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/packs",
+            json={
+                "items": [
+                    {"id": "movie-alien", "name": "Alien"},
+                    {"id": "movie-thing", "name": "The Thing"},
+                ],
+                "preset": "clean",
+                "size": 256,
+                "filename_mode": "both",
+                "title": "Structured",
+                "enrichment_mode": "text",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            [item["id"] for item in body["items"]],
+            ["movie-alien", "movie-thing"],
+        )
+        manifest = client.get(body["manifest_url"]).json()
+        self.assertEqual(manifest["schema_version"], "tierzo.pack.v1")
+        self.assertEqual(
+            [item["id"] for item in manifest["items"]],
+            ["movie-alien", "movie-thing"],
+        )
+        self.assertEqual(manifest["enrichment"]["item_asset_overrides"], {})
+        extension = client.get(body["extension_url"]).json()
+        self.assertEqual(
+            [item["id"] for item in extension["batches"][0]["images"]],
+            ["movie-alien", "movie-thing"],
+        )
+
+    def test_pack_requires_exactly_one_input_shape_and_unique_ids(self) -> None:
+        client = TestClient(app)
+        base = {
+            "preset": "clean",
+            "size": 256,
+            "filename_mode": "both",
+            "title": "Invalid",
+        }
+
+        neither = client.post("/packs", json=base)
+        both = client.post(
+            "/packs",
+            json={
+                **base,
+                "text": "Alien",
+                "items": [{"id": "alien", "name": "Alien"}],
+            },
+        )
+        duplicates = client.post(
+            "/packs",
+            json={
+                **base,
+                "items": [
+                    {"id": "alien", "name": "Alien"},
+                    {"id": "alien", "name": "Aliens"},
+                ],
+            },
+        )
+
+        self.assertEqual(neither.status_code, 422)
+        self.assertEqual(both.status_code, 422)
+        self.assertEqual(duplicates.status_code, 422)
+
+    def test_pack_rejects_ids_and_names_outside_the_browser_contract(self) -> None:
+        client = TestClient(app)
+        invalid_id = client.post(
+            "/packs",
+            json={"items": [{"id": "bad id", "name": "Alien"}]},
+        )
+        blank_name = client.post(
+            "/packs",
+            json={"items": [{"id": "alien", "name": "   "}]},
+        )
+
+        self.assertEqual(invalid_id.status_code, 422)
+        self.assertEqual(blank_name.status_code, 422)
+
+    def test_pack_rejects_invalid_filename_mode_during_validation(self) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/packs",
+            json={"text": "Alien", "filename_mode": "unsafe"},
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_structured_override_targets_duplicate_by_id(self) -> None:
+        client = TestClient(app)
+        fake_image = Path(".tierzo/test-structured-source.jpg").resolve()
+        fake_image.parent.mkdir(parents=True, exist_ok=True)
+        Image.new("RGB", (32, 32), "#ff0000").save(fake_image)
+
+        def fake_enrich_many(
+            _self: object,
+            values: list[str],
+            image_dir: Path,
+        ) -> dict[str, EnrichedAsset]:
+            return {
+                "Alien": EnrichedAsset(
+                    query="Alien",
+                    title="Alien",
+                    source_type="tmdb",
+                    source_value="348",
+                    source_url="https://www.themoviedb.org/movie/348",
+                    image_path=fake_image,
+                    confidence=0.98,
+                )
+            }
+
+        previous_key = os.environ.get("TMDB_API_KEY")
+        os.environ["TMDB_API_KEY"] = "test"
+        try:
+            with patch("tierzo_api.main.TmdbMovieEnricher.enrich_many", fake_enrich_many):
+                response = client.post(
+                    "/packs",
+                    json={
+                        "items": [
+                            {"id": "alien-a", "name": "Alien"},
+                            {"id": "alien-b", "name": "Alien"},
+                        ],
+                        "preset": "clean",
+                        "size": 256,
+                        "filename_mode": "both",
+                        "title": "Duplicate overrides",
+                        "enrichment_mode": "tmdb_movie",
+                        "item_asset_overrides": {
+                            "alien-b": {"action": "text"},
+                        },
+                    },
+                )
+        finally:
+            if previous_key is None:
+                os.environ.pop("TMDB_API_KEY", None)
+            else:
+                os.environ["TMDB_API_KEY"] = previous_key
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(
+            [item["asset_kind"] for item in body["items"]],
+            ["image-card", "text-card"],
+        )
+        manifest = client.get(body["manifest_url"]).json()
+        self.assertEqual(
+            manifest["enrichment"]["item_asset_overrides"],
+            {"alien-b": {"action": "text"}},
+        )
+
+    def test_structured_input_rejects_unknown_override_id(self) -> None:
+        client = TestClient(app)
+        response = client.post(
+            "/packs",
+            json={
+                "items": [{"id": "alien", "name": "Alien"}],
+                "item_asset_overrides": {"missing": {"action": "text"}},
+            },
+        )
+        self.assertEqual(response.status_code, 422)
+
+    def test_structured_auto_plan_does_not_replace_authoritative_items(self) -> None:
+        client = TestClient(app)
+        fake_plan = IntakePlan(
+            domain="movies",
+            tool="text",
+            items=["Replacement"],
+            confidence=0.9,
+            questions=[],
+            source="test",
+        )
+        with patch("tierzo_api.main.plan_intake", return_value=fake_plan):
+            response = client.post(
+                "/packs",
+                json={
+                    "items": [
+                        {"id": "alien", "name": "Alien"},
+                        {"id": "thing", "name": "The Thing"},
+                    ],
+                    "enrichment_mode": "auto",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            [(item["id"], item["name"]) for item in response.json()["items"]],
+            [("alien", "Alien"), ("thing", "The Thing")],
+        )
+
+    def test_generation_job_accepts_structured_items(self) -> None:
+        client = TestClient(app)
+        created = client.post(
+            "/jobs",
+            json={
+                "items": [
+                    {"id": "mario", "name": "Mario"},
+                    {"id": "luigi", "name": "Luigi"},
+                ],
+                "enrichment_mode": "text",
+            },
+        )
+
+        self.assertEqual(created.status_code, 200)
+        job = client.get(f"/jobs/{created.json()['job_id']}").json()
+        self.assertEqual(job["status"], "completed")
+        self.assertEqual(
+            [item["id"] for item in job["pack"]["items"]],
+            ["mario", "luigi"],
+        )
 
 
 if __name__ == "__main__":

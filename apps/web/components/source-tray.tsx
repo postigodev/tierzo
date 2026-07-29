@@ -32,6 +32,7 @@ export function SourceTray({
   isGenerating,
   isDraftingPrompt,
   itemCount,
+  identityNotice,
   onApplyMatchOverrides,
   onDraftFromPrompt,
   onGeneratePack,
@@ -62,6 +63,7 @@ export function SourceTray({
   isGenerating: boolean;
   isDraftingPrompt: boolean;
   itemCount: number;
+  identityNotice: string | null;
   matchOverrides: MatchOverrides;
   onApplyMatchOverrides: () => void;
   onDraftFromPrompt: () => void;
@@ -73,9 +75,8 @@ export function SourceTray({
   onSetText: (text: string) => void;
   onUpdateCardStyle: (nextStyle: Partial<CardStyle>) => void;
   onUpdateMatchOverride: (
-    itemName: string,
-    action: "keep" | "text" | "image_url",
-    value?: string,
+    itemId: string,
+    action: "keep" | "text",
   ) => void;
   pack: PackResponse | null;
   preset: string;
@@ -101,12 +102,13 @@ export function SourceTray({
               value={promptText}
               onChange={(event) => onSetPromptText(event.target.value)}
               placeholder="e.g. best PS2 survival horror games for one spooky night"
+              disabled={isGenerating}
             />
             <button
               type="button"
               className="secondary-action"
               onClick={onDraftFromPrompt}
-              disabled={isDraftingPrompt || !promptText.trim()}
+              disabled={isDraftingPrompt || isGenerating || !promptText.trim()}
             >
               {isDraftingPrompt ? "Drafting..." : "Draft list"}
             </button>
@@ -131,6 +133,7 @@ export function SourceTray({
           id="items"
           value={text}
           onChange={(event) => onSetText(event.target.value)}
+          disabled={isGenerating}
           spellCheck={false}
         />
       </div>
@@ -170,7 +173,7 @@ export function SourceTray({
         <button
           type="button"
           onClick={onGeneratePack}
-          disabled={isGenerating || itemCount === 0}
+          disabled={isGenerating || isDraftingPrompt || itemCount === 0}
         >
           {isGenerating ? "Generating..." : "Generate pack"}
         </button>
@@ -194,6 +197,9 @@ export function SourceTray({
           </a>
         ) : null}
         {error ? <p className="error">{error}</p> : null}
+        {identityNotice ? (
+          <p className="enrichment-status">{identityNotice}</p>
+        ) : null}
         {generationJob && generationJob.status !== "completed" ? (
           <AgentRunPanel job={generationJob} />
         ) : null}

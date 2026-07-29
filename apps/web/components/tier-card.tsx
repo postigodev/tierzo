@@ -24,12 +24,14 @@ export function Card({
   return (
     <figure
       className={`card ${dragOver ? "drag-over" : ""}`}
+      data-item-id={item.id}
       draggable
       onDragEnd={onDragEnd}
       onDragOver={onDragOver}
       onDragStart={(event) => {
         event.dataTransfer.effectAllowed = "move";
         event.dataTransfer.setData("text/plain", item.id);
+        event.dataTransfer.setData("application/x-tierzo-item-id", item.id);
         onDragStart?.();
       }}
       onDrop={onDrop}

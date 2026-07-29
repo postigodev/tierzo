@@ -1,7 +1,13 @@
 import type { MouseEvent } from "react";
 import { useMemo, useState } from "react";
 
-import type { BoardState, PackItem, RowMenu, TierRow } from "../lib/types";
+import type {
+  BoardState,
+  PackItem,
+  ResolvedBoardState,
+  RowMenu,
+  TierRow,
+} from "../lib/types";
 
 type UseTierBoardOptions = {
   initialBoard?: BoardState;
@@ -9,6 +15,7 @@ type UseTierBoardOptions = {
   initialTiers: TierRow[];
   maxTiers: number;
   packItems: PackItem[];
+  sourceItemIds: string[];
 };
 
 export function useTierBoard({
@@ -17,6 +24,7 @@ export function useTierBoard({
   initialTiers,
   maxTiers,
   packItems,
+  sourceItemIds,
 }: UseTierBoardOptions) {
   const [tiers, setTiers] = useState(initialTiers);
   const [selectedTierId, setSelectedTierId] = useState(
@@ -28,19 +36,40 @@ export function useTierBoard({
   const [draggedItemId, setDraggedItemId] = useState<string | null>(null);
   const [dragOverItemId, setDragOverItemId] = useState<string | null>(null);
   const [board, setBoard] = useState<BoardState>(initialBoard ?? {});
+  const activeItemIds = useMemo(() => new Set(sourceItemIds), [sourceItemIds]);
+  const activePackItems = useMemo(
+    () => packItems.filter((item) => activeItemIds.has(item.id)),
+    [activeItemIds, packItems],
+  );
+  const itemById = useMemo(
+    () => new Map(activePackItems.map((item) => [item.id, item])),
+    [activePackItems],
+  );
 
   const rankedIds = useMemo(
     () =>
       new Set(
         Object.values(board)
           .flat()
-          .map((item) => item.id),
+          .map((itemId) => itemId),
       ),
     [board],
   );
   const benchItems = useMemo(
-    () => packItems.filter((item) => !rankedIds.has(item.id)),
-    [packItems, rankedIds],
+    () => activePackItems.filter((item) => !rankedIds.has(item.id)),
+    [activePackItems, rankedIds],
+  );
+  const resolvedBoard = useMemo(
+    () =>
+      Object.fromEntries(
+        Object.entries(board).map(([tierId, itemIds]) => [
+          tierId,
+          itemIds
+            .map((itemId) => itemById.get(itemId))
+            .filter((item): item is PackItem => Boolean(item)),
+        ]),
+      ) as ResolvedBoardState,
+    [board, itemById],
   );
   const selectedTierIndex = tiers.findIndex((tier) => tier.id === selectedTierId);
 
@@ -92,9 +121,12 @@ export function useTierBoard({
 
     setTiers((current) => current.filter((tier) => tier.id !== removed.id));
     setBoard((current) => {
-      const { [removed.id]: removedItems = [], ...rest } = current;
-      if (removedItems.length > 0) {
-        rest[nextSelected.id] = [...(rest[nextSelected.id] ?? []), ...removedItems];
+      const { [removed.id]: removedItemIds = [], ...rest } = current;
+      if (removedItemIds.length > 0) {
+        rest[nextSelected.id] = [
+          ...(rest[nextSelected.id] ?? []),
+          ...removedItemIds,
+        ];
       }
       return rest;
     });
@@ -140,25 +172,24 @@ export function useTierBoard({
     targetTierId: string,
     beforeItemId?: string,
   ) {
-    const item = packItems.find((candidate) => candidate.id === itemId);
-    if (!item) {
+    if (!itemById.has(itemId)) {
       return;
     }
 
     setBoard((current) => {
       const next: BoardState = {};
       for (const [tierId, items] of Object.entries(current)) {
-        next[tierId] = items.filter((candidate) => candidate.id !== itemId);
+        next[tierId] = items.filter((candidateId) => candidateId !== itemId);
       }
 
       const targetItems = [...(next[targetTierId] ?? [])];
       const insertAt = beforeItemId
-        ? targetItems.findIndex((candidate) => candidate.id === beforeItemId)
+        ? targetItems.findIndex((candidateId) => candidateId === beforeItemId)
         : -1;
       if (insertAt >= 0) {
-        targetItems.splice(insertAt, 0, item);
+        targetItems.splice(insertAt, 0, itemId);
       } else {
-        targetItems.push(item);
+        targetItems.push(itemId);
       }
       next[targetTierId] = targetItems;
       return next;
@@ -172,7 +203,7 @@ export function useTierBoard({
     setBoard((current) => {
       const next: BoardState = {};
       for (const [tierId, items] of Object.entries(current)) {
-        next[tierId] = items.filter((candidate) => candidate.id !== itemId);
+        next[tierId] = items.filter((candidateId) => candidateId !== itemId);
       }
       return next;
     });
@@ -195,6 +226,7 @@ export function useTierBoard({
     moveItemToTier,
     openRowMenu,
     rowMenu,
+    resolvedBoard,
     selectedTierId,
     selectedTierIndex,
     setBoard,

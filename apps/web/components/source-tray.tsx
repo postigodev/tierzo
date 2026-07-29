@@ -1,6 +1,7 @@
 "use client";
 
 import type { CSSProperties } from "react";
+import { useState } from "react";
 
 import { AgentRunPanel } from "./agent-run-panel";
 import { CardLabPanel } from "./card-lab-panel";
@@ -22,12 +23,15 @@ import type {
   PollingState,
   PromptDraftResponse,
 } from "../lib/types";
+import type { WorkspacePhase } from "../lib/workspace-view";
 
 type FontOption = {
   css: string;
   label: string;
   value: string;
 };
+
+type IntakeMode = "describe" | "paste";
 
 export function SourceTray({
   canReviewMatches,
@@ -64,7 +68,9 @@ export function SourceTray({
   promptText,
   showMatches,
   text,
+  title,
   matchOverrides,
+  workspacePhase,
 }: {
   canReviewMatches: boolean;
   artifactState: ArtifactState;
@@ -104,7 +110,14 @@ export function SourceTray({
   promptText: string;
   showMatches: boolean;
   text: string;
+  title: string;
+  workspacePhase: WorkspacePhase;
 }) {
+  const [intakeMode, setIntakeMode] = useState<IntakeMode>("describe");
+  const boardFirst =
+    pack !== null ||
+    workspacePhase === "lost" ||
+    workspacePhase === "expired";
   const canControlSavedJob = canControlSavedGeneration({
     artifactState,
     hasGenerationJob: generationJob !== null,
@@ -113,21 +126,49 @@ export function SourceTray({
     pollingState,
   });
 
-  return (
-    <div className="source-tray">
-      <div>
-        <div className="prompt-draft-box">
-          <div className="source-copy prompt-draft-copy">
-            <span>Prompt to tier list</span>
-            <strong>Describe what you want and Tierzo drafts the list</strong>
-          </div>
+  const intake = (
+    <div className="pack-composer">
+      <div className="intake-tabs" role="tablist" aria-label="Choose input type">
+        <button
+          aria-controls="describe-panel"
+          aria-selected={intakeMode === "describe"}
+          className={intakeMode === "describe" ? "active" : ""}
+          id="describe-tab"
+          onClick={() => setIntakeMode("describe")}
+          role="tab"
+          type="button"
+        >
+          Describe
+        </button>
+        <button
+          aria-controls="paste-panel"
+          aria-selected={intakeMode === "paste"}
+          className={intakeMode === "paste" ? "active" : ""}
+          id="paste-tab"
+          onClick={() => setIntakeMode("paste")}
+          role="tab"
+          type="button"
+        >
+          Paste list
+        </button>
+      </div>
+
+      {intakeMode === "describe" ? (
+        <div
+          aria-labelledby="describe-tab"
+          className="intake-panel describe-panel"
+          id="describe-panel"
+          role="tabpanel"
+        >
+          <label htmlFor="prompt-input">What do you want to rank?</label>
           <div className="prompt-draft-row">
             <input
+              id="prompt-input"
               aria-label="Prompt to tier list"
               className="prompt-draft-input"
               value={promptText}
               onChange={(event) => onSetPromptText(event.target.value)}
-              placeholder="e.g. best PS2 survival horror games for one spooky night"
+              placeholder="Best PS2 survival horror games for one spooky night"
               disabled={isGenerating}
             />
             <button
@@ -139,95 +180,142 @@ export function SourceTray({
               {isDraftingPrompt ? "Drafting..." : "Draft list"}
             </button>
           </div>
-          {promptDraft ? (
-            <p className="prompt-draft-status">
-              Drafted {promptDraft.items.length} items via {formatToolName(promptDraft.suggested_enrichment_mode)}
-              {promptDraft.cache_hit ? " from cache" : ""}.
-            </p>
-          ) : (
-            <p className="prompt-draft-status">
-              Tierzo suggests a title, item list, and best generate mode before rendering.
-            </p>
-          )}
+          <p className="prompt-draft-status">
+            {promptDraft
+              ? `Drafted ${promptDraft.items.length} items via ${formatToolName(promptDraft.suggested_enrichment_mode)}${promptDraft.cache_hit ? " from cache" : ""}. Review the list, then create the pack.`
+              : "Tierzo drafts a title and editable list before generation."}
+          </p>
           {promptError ? <p className="error">{promptError}</p> : null}
         </div>
-        <div className="source-copy">
-          <span>Items</span>
-          <strong>{itemCount} items</strong>
+      ) : (
+        <div
+          aria-labelledby="paste-tab"
+          className="intake-panel paste-panel"
+          id="paste-panel"
+          role="tabpanel"
+        >
+          <div className="source-copy">
+            <label htmlFor="items">One item per line</label>
+            <strong>{itemCount} items</strong>
+          </div>
+          <textarea
+            id="items"
+            value={text}
+            onChange={(event) => onSetText(event.target.value)}
+            disabled={isGenerating}
+            placeholder={"Silent Hill 2\nResident Evil 4\nFatal Frame"}
+            spellCheck={false}
+          />
         </div>
-        <textarea
-          id="items"
-          value={text}
-          onChange={(event) => onSetText(event.target.value)}
-          disabled={isGenerating}
-          spellCheck={false}
-        />
-      </div>
-      <div className="source-actions">
-        <label>
-          Preset
-          <select
-            value={preset}
-            onChange={(event) => onSelectPreset(event.target.value)}
-          >
-            {presets.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="mode-label">
-          <span className="mode-label-title">Generate mode</span>
-          <select
-            aria-label="Generate mode"
-            value={enrichmentMode}
-            onChange={(event) => onSetEnrichmentMode(event.target.value)}
-          >
-            <option value="auto">Auto Agent</option>
-            <option value="text">Text cards only</option>
-            <option value="tmdb_movie">Movie posters</option>
-          </select>
-          <small>Pick automatic sourcing or force a specific asset mode.</small>
-        </label>
-        <CardLabPanel
-          cardLabStyle={cardLabStyle}
-          cardStyle={cardStyle}
-          fontOptions={fontOptions}
-          onUpdateStyle={onUpdateCardStyle}
-        />
+      )}
+
+      <div className="composer-footer">
+        <span>
+          {itemCount > 0
+            ? `${itemCount} item${itemCount === 1 ? "" : "s"} ready`
+            : "Add items to create a pack"}
+        </span>
         <button
+          className="primary-create-action"
           type="button"
           onClick={onGeneratePack}
           disabled={isGenerating || isDraftingPrompt || itemCount === 0}
         >
-          {isGenerating ? "Generating..." : "Generate pack"}
+          {isGenerating
+            ? "Generating..."
+            : pack
+              ? "Regenerate pack"
+              : "Create pack"}
         </button>
-        {pack && canReviewMatches ? (
-          <button
-            className="secondary-action"
-            type="button"
-            onClick={() => onSetShowMatches((current) => !current)}
-          >
-            {showMatches ? "Hide matches" : "View matches"}
-          </button>
+      </div>
+    </div>
+  );
+
+  return (
+    <div
+      className={`source-tray source-tray-${workspacePhase} ${
+        boardFirst ? "source-tray-board-first" : ""
+      }`}
+    >
+      <div className="source-tray-heading">
+        <div>
+          <span>{boardFirst ? "Pack workspace" : "Start here"}</span>
+          <h1>
+            {boardFirst
+              ? title.trim() || pack?.title || "Untitled tier pack"
+              : "Build your tier pack"}
+          </h1>
+          <p>
+            {boardFirst
+              ? `${itemCount} items · ${formatToolName(enrichmentMode)}`
+              : "Describe what you want or paste the exact list."}
+          </p>
+        </div>
+        {boardFirst ? (
+          <details className="source-editor-disclosure">
+            <summary>Edit source</summary>
+            {intake}
+          </details>
         ) : null}
-        {pack ? (
-          <a className="secondary-action" href={apiUrl(pack.manifest_url)}>
-            Manifest
-          </a>
-        ) : null}
-        {pack ? (
-          <a className="secondary-action" href={apiUrl(pack.extension_url)}>
-            Extension JSON
-          </a>
-        ) : null}
+      </div>
+
+      {!boardFirst ? intake : null}
+
+        <details
+          className="generation-options"
+          key={boardFirst ? "board-first-options" : "intake-options"}
+        >
+        <summary>
+          <span>Style & generation options</span>
+          <small>
+            {preset} · {formatToolName(enrichmentMode)}
+          </small>
+        </summary>
+        <div className="generation-options-body">
+          <label>
+            Preset
+            <select
+              value={preset}
+              onChange={(event) => onSelectPreset(event.target.value)}
+            >
+              {presets.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="mode-label">
+            <span className="mode-label-title">Generate mode</span>
+            <select
+              aria-label="Generate mode"
+              value={enrichmentMode}
+              onChange={(event) => onSetEnrichmentMode(event.target.value)}
+            >
+              <option value="auto">Auto Agent</option>
+              <option value="text">Text cards only</option>
+              <option value="tmdb_movie">Movie posters</option>
+            </select>
+            <small>
+              Pick automatic sourcing or force a specific asset mode.
+            </small>
+          </label>
+          <CardLabPanel
+            cardLabStyle={cardLabStyle}
+            cardStyle={cardStyle}
+            fontOptions={fontOptions}
+            onUpdateStyle={onUpdateCardStyle}
+          />
+        </div>
+      </details>
+
+      <div className="workspace-feedback" aria-live="polite">
         {error ? <p className="error">{error}</p> : null}
         {identityNotice ? (
           <p className="enrichment-status">{identityNotice}</p>
         ) : null}
         {canControlSavedJob ? (
-          <div className="agent-run" aria-live="polite">
+          <div className="agent-run">
             <div className="agent-run-head">
               <div>
                 <strong>Saved generation</strong>
@@ -275,7 +363,9 @@ export function SourceTray({
           </p>
         ) : null}
         {pack ? (
-          <p className="enrichment-status">{formatGenerationStatus(pack)}</p>
+          <p className="enrichment-status">
+            {formatGenerationStatus(pack)}
+          </p>
         ) : null}
         {pack?.agent_plan ? (
           <p className="enrichment-status">
@@ -284,16 +374,41 @@ export function SourceTray({
             {pack.agent_plan.cache_hit ? " from cache" : ""}
           </p>
         ) : null}
-        {pack && canReviewMatches && showMatches ? (
-          <MatchesPanel
-            isApplying={isGenerating}
-            onApply={onApplyMatchOverrides}
-            onOverride={onUpdateMatchOverride}
-            overrides={matchOverrides}
-            pack={pack}
-          />
-        ) : null}
       </div>
+
+      {boardFirst ? (
+        <div className="pack-secondary-actions">
+          {pack && canReviewMatches ? (
+            <button
+              className="secondary-action"
+              type="button"
+              onClick={() => onSetShowMatches((current) => !current)}
+            >
+              {showMatches ? "Hide matches" : "Review matches"}
+            </button>
+          ) : null}
+          {pack ? (
+            <a className="secondary-action" href={apiUrl(pack.manifest_url)}>
+              Manifest
+            </a>
+          ) : null}
+          {pack ? (
+            <a className="secondary-action" href={apiUrl(pack.extension_url)}>
+              Extension JSON
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+
+      {pack && canReviewMatches && showMatches ? (
+        <MatchesPanel
+          isApplying={isGenerating}
+          onApply={onApplyMatchOverrides}
+          onOverride={onUpdateMatchOverride}
+          overrides={matchOverrides}
+          pack={pack}
+        />
+      ) : null}
     </div>
   );
 }

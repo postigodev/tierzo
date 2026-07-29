@@ -1153,6 +1153,8 @@ class TierzoApiTests(unittest.TestCase):
         body = response.json()
         self.assertEqual(body["enrichment_status"], "tmdb_movie:0/1")
         self.assertEqual(body["items"][0]["asset_kind"], "text-card")
+        self.assertEqual(body["outcome"], "normal")
+        self.assertEqual(body["warnings"], [])
 
         manifest_body = client.get(body["manifest_url"]).json()
         self.assertEqual(manifest_body["enrichment"]["asset_overrides"], {"Alien": "text"})

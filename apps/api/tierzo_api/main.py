@@ -838,7 +838,12 @@ def _build_pack(
                     and item.id not in force_text_item_ids
                 }
                 enrichment_status = f"tmdb_movie:{len(enriched_assets)}/{len(source_items)}"
-                if len(enriched_assets) < len(source_items):
+                expected_enriched_count = sum(
+                    item.name not in force_text_values
+                    and item.id not in force_text_item_ids
+                    for item in source_items
+                )
+                if len(enriched_assets) < expected_enriched_count:
                     result_warnings.append(
                         make_warning("tmdb_partial_match")
                     )

@@ -29,10 +29,10 @@ Import, prompt drafting, manual source editing, and pack generation are mutually
 The API reuses the deterministic parsers in `src/tierzo/parsers.py`:
 
 - TXT: non-empty normalized lines;
-- CSV: non-empty values from the first column;
-- XLSX: non-empty values from the first column of the first worksheet.
+- CSV: non-empty values from the first column, with internal whitespace collapsed to one space;
+- XLSX: non-empty values from the first column of the first worksheet, with internal whitespace collapsed to one space.
 
-The first non-empty value is preserved. Tierzo does not guess whether it is a header. Duplicate values are preserved. The response explains these semantics rather than silently applying heuristics.
+Collapsing whitespace prevents a multiline spreadsheet cell from becoming several web items when it passes through the line-based editable preview. It occurs before item-length validation and before the response count is calculated. The first non-empty value is preserved. Tierzo does not guess whether it is a header. Duplicate values are preserved. The response explains these semantics rather than silently applying heuristics.
 
 The parsers accept optional item-count and item-length limits so the API can stop at `MAX_LIST_ITEMS + 1` instead of materializing an unbounded file. XLSX parsing uses read-only mode, disables external links, and closes the workbook in `finally`. Existing CLI calls remain unrestricted unless they explicitly provide limits.
 
@@ -90,7 +90,7 @@ A later import supersedes an earlier in-flight request. Cancelling or replacing 
 
 ## Verification
 
-Backend tests cover successful TXT, CSV, and XLSX imports plus uppercase extensions, duplicates, empty input, unsupported types, invalid UTF-8, malformed XLSX, encrypted/oversized XLSX archives, byte limits, item-count limits, item-length limits, and cleanup after success and parser exceptions.
+Backend tests cover successful TXT, CSV, and XLSX imports plus uppercase extensions, duplicates, multiline CSV/XLSX cells, empty input, unsupported types, invalid UTF-8, malformed XLSX, encrypted/oversized XLSX archives, byte limits, item-count limits, item-length limits, and cleanup after success and parser exceptions.
 
 Web tests cover contract validation, structured errors, stale-response protection, and preservation of the current list on failure. The new pure test file is added to `test:state`, so `pnpm verify` executes it. The real browser smoke first submits an invalid upload and confirms persisted workspace state is unchanged, then uploads a valid fixture, confirms the editable replacement and interpretation message, generates a pack, and verifies the established artifact/export path.
 

@@ -15,14 +15,32 @@ from pydantic import BaseModel
 from tierzo.parsers import InputLimitError, parse_input_file
 
 
-MAX_INTAKE_FILE_BYTES = int(os.getenv("MAX_INTAKE_FILE_BYTES", str(5 * 1024 * 1024)))
-MAX_XLSX_ARCHIVE_MEMBERS = int(os.getenv("MAX_XLSX_ARCHIVE_MEMBERS", "1000"))
-MAX_XLSX_UNCOMPRESSED_BYTES = int(
-    os.getenv("MAX_XLSX_UNCOMPRESSED_BYTES", str(25 * 1024 * 1024))
+def positive_int_env(name: str, default: int) -> int:
+    value = int(os.getenv(name, str(default)))
+    if value <= 0:
+        raise ValueError(f"{name} must be a positive integer.")
+    return value
+
+
+MAX_INTAKE_FILE_BYTES = positive_int_env("MAX_INTAKE_FILE_BYTES", 5 * 1024 * 1024)
+MAX_XLSX_ARCHIVE_MEMBERS = positive_int_env("MAX_XLSX_ARCHIVE_MEMBERS", 1000)
+MAX_XLSX_UNCOMPRESSED_BYTES = positive_int_env(
+    "MAX_XLSX_UNCOMPRESSED_BYTES",
+    25 * 1024 * 1024,
 )
 READ_CHUNK_BYTES = 64 * 1024
 
 FileFormat = Literal["txt", "csv", "xlsx"]
+FileIntakeErrorCode = Literal[
+    "unsupported_file_type",
+    "file_too_large",
+    "too_many_items",
+    "invalid_text_encoding",
+    "malformed_file",
+    "empty_intake",
+    "item_too_long",
+    "unsafe_xlsx_archive",
+]
 
 INTERPRETATIONS: dict[FileFormat, str] = {
     "txt": "Imported non-empty lines; the first value was preserved.",
@@ -47,7 +65,7 @@ class FileIntakeResponse(BaseModel):
 
 
 class FileIntakeErrorDetail(BaseModel):
-    code: str
+    code: FileIntakeErrorCode
     message: str
     limit: int | None = None
     item_index: int | None = None
@@ -62,7 +80,7 @@ class FileIntakeException(Exception):
 
 def intake_error(
     status_code: int,
-    code: str,
+    code: FileIntakeErrorCode,
     message: str,
     *,
     limit: int | None = None,
@@ -81,7 +99,7 @@ def intake_error(
 
 def sanitize_filename(filename: str | None) -> str:
     candidate = (filename or "").replace("\x00", "").strip()
-    return Path(candidate).name if candidate else "upload"
+    return candidate.replace("\\", "/").rsplit("/", 1)[-1] if candidate else "upload"
 
 
 def resolve_format(filename: str) -> tuple[str, FileFormat]:

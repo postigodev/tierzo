@@ -74,11 +74,12 @@ def parse_txt_file(
     max_items: int | None = None,
     max_item_length: int | None = None,
 ) -> list[str]:
-    return parse_text_lines(
-        path.read_text(encoding="utf-8-sig"),
-        max_items=max_items,
-        max_item_length=max_item_length,
-    )
+    with path.open("r", encoding="utf-8-sig") as file:
+        return collect_items(
+            file,
+            max_items=max_items,
+            max_item_length=max_item_length,
+        )
 
 
 def parse_csv_file(

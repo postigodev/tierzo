@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from io import BytesIO
 from pathlib import Path
-from unittest.mock import Mock, call, patch
+from unittest.mock import MagicMock, Mock, call, patch
 
 from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
@@ -69,7 +69,13 @@ class TierzoApiTests(unittest.TestCase):
     def test_file_intake_reads_txt(self) -> None:
         response = TestClient(app).post(
             "/intakes/files",
-            files={"file": ("../Movies.TXT", b"Alien\nAliens\nAlien\n", "text/plain")},
+            files={
+                "file": (
+                    "..\\folder/Movies.TXT",
+                    b"Alien\nAliens\nAlien\n",
+                    "text/plain",
+                )
+            },
         )
 
         self.assertEqual(response.status_code, 200)
@@ -194,6 +200,22 @@ class TierzoApiTests(unittest.TestCase):
         self.assertEqual(malformed.json()["detail"]["code"], "malformed_file")
         self.assertEqual(unsafe.status_code, 422)
         self.assertEqual(unsafe.json()["detail"]["code"], "unsafe_xlsx_archive")
+
+    def test_file_intake_rejects_encrypted_xlsx_entries(self) -> None:
+        archive = MagicMock()
+        archive.infolist.return_value = [Mock(flag_bits=0x1, file_size=1)]
+        zip_file = MagicMock()
+        zip_file.return_value.__enter__.return_value = archive
+
+        with patch("tierzo_api.file_intake.zipfile.ZipFile", zip_file):
+            response = TestClient(app).post(
+                "/intakes/files",
+                files={"file": ("items.xlsx", b"archive", "application/octet-stream")},
+            )
+
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"]["code"], "unsafe_xlsx_archive")
+        self.assertIn("Encrypted", response.json()["detail"]["message"])
 
     def test_file_intake_removes_temporary_file_after_success_and_error(self) -> None:
         client = TestClient(app)

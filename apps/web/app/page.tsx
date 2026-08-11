@@ -125,6 +125,7 @@ export default function Home() {
   );
   const [isExporting, setIsExporting] = useState(false);
   const {
+    clearFeedback: clearFileImportFeedback,
     error: fileImportError,
     importFile,
     isImporting,
@@ -316,7 +317,13 @@ export default function Home() {
     );
   }
 
-  function updateSourceText(nextText: string) {
+  function updateSourceText(
+    nextText: string,
+    source: "file" | "manual" = "manual",
+  ) {
+    if (source === "manual") {
+      clearFileImportFeedback();
+    }
     const reconciliation = reconcileSourceItems(
       sourceItems,
       parseSourceText(nextText),
@@ -400,6 +407,7 @@ export default function Home() {
         warnings: Array.isArray(rawDraft.warnings) ? rawDraft.warnings : [],
       };
       setPromptDraft(draft);
+      clearFileImportFeedback();
       setTitle(draft.title);
       setDescription(draft.description ?? "");
       const draftedItems = reconcileSourceItems([], draft.items).items;
@@ -427,7 +435,7 @@ export default function Home() {
     if (!intake) {
       return;
     }
-    updateSourceText(intake.items.join("\n"));
+    updateSourceText(intake.items.join("\n"), "file");
   }
 
   function selectPreset(nextPreset: string) {

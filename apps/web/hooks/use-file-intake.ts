@@ -42,7 +42,12 @@ export function useFileIntake() {
         body: form,
         signal: request.signal,
       });
-      const body: unknown = await response.json();
+      let body: unknown;
+      try {
+        body = await response.json();
+      } catch {
+        throw new Error(FALLBACK_ERROR);
+      }
       if (!response.ok) {
         throw new Error(parseFileIntakeError(body, FALLBACK_ERROR));
       }
@@ -70,7 +75,13 @@ export function useFileIntake() {
     }
   }
 
+  function clearFeedback() {
+    setSummary(null);
+    setError(null);
+  }
+
   return {
+    clearFeedback,
     error,
     importFile,
     isImporting,

@@ -1449,6 +1449,70 @@ button.secondary-action {
   margin-bottom: 0;
 }
 
+.file-import-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 10px 12px;
+  border: 1px dashed var(--line-bright);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.file-import-row > div {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.file-import-row strong {
+  color: var(--text);
+  font-size: 11px;
+}
+
+.file-import-row span {
+  color: var(--muted);
+  font-size: 9px;
+  line-height: 1.45;
+}
+
+.file-import-action {
+  position: relative;
+  flex: 0 0 auto;
+  overflow: hidden;
+  padding: 9px 12px;
+  border: 1px solid var(--line-bright);
+  border-radius: 4px;
+  background: #181818;
+  color: var(--muted-bright);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 900;
+}
+
+.file-import-action:hover {
+  border-color: var(--creation-accent);
+  color: #fff;
+}
+
+.file-import-action[aria-disabled="true"] {
+  cursor: not-allowed;
+  opacity: 0.48;
+}
+
+.file-import-action input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+}
+
+.file-import-action:focus-within {
+  outline: 2px solid rgba(255, 190, 85, 0.8);
+  outline-offset: 2px;
+}
+
 .composer-footer {
   display: flex;
   align-items: center;
@@ -1749,6 +1813,15 @@ button.secondary-action {
   .intake-panel {
     min-height: 170px;
     padding: 12px;
+  }
+
+  .file-import-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .file-import-action {
+    align-self: flex-start;
   }
 
   .composer-footer {

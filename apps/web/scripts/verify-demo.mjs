@@ -1,6 +1,8 @@
 import playwright from "playwright";
 
 const { chromium } = playwright;
+const webBaseUrl = process.env.TIERZO_DEMO_WEB_URL ?? "http://localhost:3000";
+const apiBaseUrl = process.env.TIERZO_DEMO_API_URL ?? "http://localhost:8000";
 
 const browser = await chromium.launch({ headless: true });
 const context = await browser.newContext({
@@ -115,8 +117,8 @@ function assertEqual(actual, expected, message) {
 }
 
 try {
-  await page.goto("http://localhost:3000", { waitUntil: "networkidle" });
-  const capabilitiesResponse = await fetch("http://localhost:8000/capabilities");
+  await page.goto(webBaseUrl, { waitUntil: "networkidle" });
+  const capabilitiesResponse = await fetch(`${apiBaseUrl}/capabilities`);
   const capabilityContract = await capabilitiesResponse.json();
   if (
     !capabilitiesResponse.ok ||
@@ -161,7 +163,34 @@ try {
     .getByLabel("Tier list description")
     .fill("Lifecycle recovery smoke");
   await openPasteComposer();
-  await page.locator("textarea#items").fill("Alien\nAlien\nThe Thing");
+  await page.waitForFunction(
+    (key) => JSON.parse(window.localStorage.getItem(key) ?? "null")?.text,
+    workspaceStorageKey,
+  );
+  const savedBeforeInvalidImport = await readSavedWorkspace();
+  await page.getByLabel("Import TXT, CSV, or XLSX list").setInputFiles({
+    name: "items.json",
+    mimeType: "application/json",
+    buffer: Buffer.from("[]"),
+  });
+  await page.getByText(/Unsupported file type/).waitFor();
+  const savedAfterInvalidImport = await readSavedWorkspace();
+  assertEqual(
+    savedAfterInvalidImport,
+    savedBeforeInvalidImport,
+    "Rejected file import changed persisted workspace state",
+  );
+
+  await page
+    .getByLabel("Import TXT, CSV, or XLSX list")
+    .setInputFiles("../../examples/demo-items.csv");
+  await page.getByText(/Imported 3 items from demo-items.csv/).waitFor();
+  if (
+    (await page.locator("textarea#items").inputValue()) !==
+    "Alien\nAlien\nThe Thing"
+  ) {
+    throw new Error("Valid CSV import did not replace the editable source list.");
+  }
   await openGenerationOptions();
   const autoOption = page.locator(
     'select[aria-label="Generate mode"] option[value="auto"]',
@@ -502,7 +531,7 @@ try {
   }
 
   const regeneratedPackId = savedAfterRegeneration.pack.pack_id;
-  const statusHref = `http://localhost:8000/packs/${regeneratedPackId}/status`;
+  const statusHref = `${apiBaseUrl}/packs/${regeneratedPackId}/status`;
   const firstStatus = await fetch(statusHref).then((response) => response.json());
   const secondStatus = await fetch(statusHref).then((response) => response.json());
   if (
@@ -522,7 +551,7 @@ try {
   );
 
   const imageResponse = await fetch(
-    `http://localhost:8000${savedAfterRegeneration.pack.items[0].image_url}`,
+    `${apiBaseUrl}${savedAfterRegeneration.pack.items[0].image_url}`,
   );
   const zipResponse = await fetch(zipHref);
   if (!imageResponse.ok || !zipResponse.ok) {
@@ -559,6 +588,11 @@ try {
           preservedRankedIds: rankedIdsAfterLoss,
         },
         capabilities: capabilityContract,
+        fileIntake: {
+          rejectedImportPreservedWorkspace: true,
+          importedFixture: "examples/demo-items.csv",
+          importedItems: ["Alien", "Alien", "The Thing"],
+        },
         generationOutcome: {
           outcome: savedAfterRegeneration.pack.outcome,
           warningCodes: savedAfterRegeneration.pack.warnings.map(

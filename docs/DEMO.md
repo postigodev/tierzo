@@ -16,7 +16,8 @@ The current demo already supports:
 
 1. Open Tierzo.
 2. Edit the tier-list title, description, and rows inline.
-3. Describe a list or paste exact items from equal entry points.
+3. Describe a list or paste/import exact items from equal entry points. Web
+   imports accept TXT, CSV, and XLSX and remain editable before generation.
 4. Optionally expand style and generation settings to choose `Auto Agent`,
    `Text cards only`, or `Movie posters` and customize Card Lab.
 5. Generate through an observable job panel.
@@ -34,6 +35,15 @@ actions; the pasted source, editable tier labels, ranking assignments, title,
 description, style, generate mode, and last job ID remain ready to regenerate.
 If the check cannot reach the API, Tierzo leaves the saved workspace untouched
 and reports that validation is unavailable.
+
+File intake replaces the current source only after the backend validates and
+parses the complete request. TXT uses non-empty lines; CSV uses the first
+column; XLSX uses the first worksheet's first column. CSV/XLSX cell whitespace
+is collapsed, duplicates are retained, and Tierzo does not guess or remove a
+header. A rejected import leaves the workspace untouched. A successful import
+preserves compatible item identities and rankings, while the existing board
+and artifacts remain visibly stale until the user regenerates. Uploaded source
+files are removed immediately after parsing and are not stored with the pack.
 
 ## First-Viewport Requirements
 

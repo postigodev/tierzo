@@ -7,13 +7,16 @@ import shutil
 import sys
 import tempfile
 import unittest
+import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
+from io import BytesIO
 from pathlib import Path
 from unittest.mock import Mock, call, patch
 
 from fastapi import BackgroundTasks
 from fastapi.testclient import TestClient
+from openpyxl import Workbook
 from PIL import Image
 
 sys.path.append(str(Path("apps/api").resolve()))
@@ -52,6 +55,176 @@ class TierzoApiTests(unittest.TestCase):
 
         self.addCleanup(remove_pack_artifacts)
         return pack
+
+    def create_xlsx_bytes(self, rows: list[list[object]]) -> bytes:
+        output = BytesIO()
+        workbook = Workbook()
+        worksheet = workbook.active
+        for row in rows:
+            worksheet.append(row)
+        workbook.save(output)
+        workbook.close()
+        return output.getvalue()
+
+    def test_file_intake_reads_txt(self) -> None:
+        response = TestClient(app).post(
+            "/intakes/files",
+            files={"file": ("../Movies.TXT", b"Alien\nAliens\nAlien\n", "text/plain")},
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(
+            response.json(),
+            {
+                "schema_version": "tierzo.file-intake.v1",
+                "filename": "Movies.TXT",
+                "format": "txt",
+                "items": ["Alien", "Aliens", "Alien"],
+                "item_count": 3,
+                "interpretation": "Imported non-empty lines; the first value was preserved.",
+            },
+        )
+
+    def test_file_intake_reads_csv_and_collapses_multiline_cells(self) -> None:
+        response = TestClient(app).post(
+            "/intakes/files",
+            files={
+                "file": (
+                    "movies.csv",
+                    b'"Alien\nAliens",movie\nArrival,movie\n',
+                    "text/csv",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["items"], ["Alien Aliens", "Arrival"])
+        self.assertIn("first column", response.json()["interpretation"])
+        self.assertIn("whitespace", response.json()["interpretation"])
+
+    def test_file_intake_reads_xlsx_first_sheet_and_column(self) -> None:
+        response = TestClient(app).post(
+            "/intakes/files",
+            files={
+                "file": (
+                    "movies.xlsx",
+                    self.create_xlsx_bytes(
+                        [["Alien\nAliens", "ignored"], ["Arrival", "ignored"]]
+                    ),
+                    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                )
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["format"], "xlsx")
+        self.assertEqual(response.json()["items"], ["Alien Aliens", "Arrival"])
+        self.assertIn("first worksheet", response.json()["interpretation"])
+
+    def test_file_intake_rejects_unsupported_empty_and_invalid_text(self) -> None:
+        client = TestClient(app)
+        unsupported = client.post(
+            "/intakes/files",
+            files={"file": ("items.json", b"[]", "application/json")},
+        )
+        empty = client.post(
+            "/intakes/files",
+            files={"file": ("items.txt", b" \n\n", "text/plain")},
+        )
+        invalid_text = client.post(
+            "/intakes/files",
+            files={"file": ("items.txt", b"\xff\xfe", "text/plain")},
+        )
+
+        self.assertEqual(unsupported.status_code, 415)
+        self.assertEqual(unsupported.json()["detail"]["code"], "unsupported_file_type")
+        self.assertEqual(empty.status_code, 422)
+        self.assertEqual(empty.json()["detail"]["code"], "empty_intake")
+        self.assertEqual(invalid_text.status_code, 422)
+        self.assertEqual(
+            invalid_text.json()["detail"]["code"],
+            "invalid_text_encoding",
+        )
+
+    def test_file_intake_rejects_size_item_count_and_item_length_limits(self) -> None:
+        client = TestClient(app)
+        with patch("tierzo_api.file_intake.MAX_INTAKE_FILE_BYTES", 5):
+            oversized = client.post(
+                "/intakes/files",
+                files={"file": ("items.txt", b"123456", "text/plain")},
+            )
+        with patch.object(api_main, "MAX_LIST_ITEMS", 1):
+            too_many = client.post(
+                "/intakes/files",
+                files={"file": ("items.txt", b"Alien\nAliens\n", "text/plain")},
+            )
+        too_long = client.post(
+            "/intakes/files",
+            files={"file": ("items.txt", b"a" * 201, "text/plain")},
+        )
+
+        self.assertEqual(oversized.status_code, 413)
+        self.assertEqual(oversized.json()["detail"], {
+            "code": "file_too_large",
+            "message": "File is too large; maximum is 5 bytes.",
+            "limit": 5,
+        })
+        self.assertEqual(too_many.status_code, 413)
+        self.assertEqual(too_many.json()["detail"]["code"], "too_many_items")
+        self.assertEqual(too_long.status_code, 422)
+        self.assertEqual(too_long.json()["detail"]["code"], "item_too_long")
+        self.assertEqual(too_long.json()["detail"]["item_index"], 0)
+
+    def test_file_intake_rejects_malformed_and_unsafe_xlsx(self) -> None:
+        client = TestClient(app)
+        malformed = client.post(
+            "/intakes/files",
+            files={"file": ("items.xlsx", b"not-a-zip", "application/octet-stream")},
+        )
+        archive = BytesIO()
+        with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as bundle:
+            bundle.writestr("xl/large.xml", "x" * 32)
+        with patch("tierzo_api.file_intake.MAX_XLSX_UNCOMPRESSED_BYTES", 16):
+            unsafe = client.post(
+                "/intakes/files",
+                files={"file": ("items.xlsx", archive.getvalue(), "application/octet-stream")},
+            )
+
+        self.assertEqual(malformed.status_code, 422)
+        self.assertEqual(malformed.json()["detail"]["code"], "malformed_file")
+        self.assertEqual(unsafe.status_code, 422)
+        self.assertEqual(unsafe.json()["detail"]["code"], "unsafe_xlsx_archive")
+
+    def test_file_intake_removes_temporary_file_after_success_and_error(self) -> None:
+        client = TestClient(app)
+        captured_paths: list[Path] = []
+
+        def successful_parser(path: Path, **_: object) -> list[str]:
+            captured_paths.append(path)
+            self.assertTrue(path.exists())
+            return ["Alien"]
+
+        with patch("tierzo_api.file_intake.parse_input_file", side_effect=successful_parser):
+            response = client.post(
+                "/intakes/files",
+                files={"file": ("items.txt", b"Alien", "text/plain")},
+            )
+        self.assertEqual(response.status_code, 200)
+        self.assertFalse(captured_paths[-1].exists())
+
+        def failing_parser(path: Path, **_: object) -> list[str]:
+            captured_paths.append(path)
+            self.assertTrue(path.exists())
+            raise ValueError("broken parser")
+
+        with patch("tierzo_api.file_intake.parse_input_file", side_effect=failing_parser):
+            response = client.post(
+                "/intakes/files",
+                files={"file": ("items.txt", b"Alien", "text/plain")},
+            )
+        self.assertEqual(response.status_code, 422)
+        self.assertEqual(response.json()["detail"]["code"], "malformed_file")
+        self.assertFalse(captured_paths[-1].exists())
 
     def test_capabilities_describe_configured_and_deterministic_paths(self) -> None:
         client = TestClient(app)

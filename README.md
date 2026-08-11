@@ -6,8 +6,9 @@ The current version includes a reusable Python core, a CLI, a FastAPI backend, a
 
 ## What Works Today
 
-- Read `.txt`, `.csv`, and `.xlsx` inputs.
-- Use the first column from CSV/XLSX files.
+- Import `.txt`, `.csv`, and `.xlsx` lists in the CLI or web workspace.
+- Review and edit imported items before generation; CSV uses the first column
+  and XLSX uses the first worksheet's first column.
 - Generate one square PNG per item.
 - Auto-fit and wrap long text.
 - Use basic visual presets.
@@ -213,7 +214,16 @@ OPENAI_API_KEY=your_openai_api_key
 TMDB_API_KEY=your_tmdb_api_key
 FRONTEND_URL=http://localhost:3000
 NEXT_PUBLIC_API_URL=http://localhost:8000
+MAX_INTAKE_FILE_BYTES=5242880
+MAX_XLSX_ARCHIVE_MEMBERS=1000
+MAX_XLSX_UNCOMPRESSED_BYTES=26214400
 ```
+
+Web file intake replaces the editable source only after parsing succeeds.
+Tierzo keeps duplicate items, preserves the first non-empty value instead of
+guessing headers, collapses internal whitespace in CSV/XLSX cells, and removes
+the uploaded source file immediately after parsing. Existing board artifacts
+remain available but must be regenerated to reflect the imported source.
 
 For production, set the deployed frontend origin in `FRONTEND_URL` so FastAPI only allows that domain.
 

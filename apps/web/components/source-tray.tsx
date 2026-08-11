@@ -42,10 +42,13 @@ export function SourceTray({
   cardStyle,
   enrichmentMode,
   error,
+  fileImportError,
+  fileImportSummary,
   fontOptions,
   generationJob,
   isGenerating,
   isDraftingPrompt,
+  isImporting,
   itemCount,
   identityNotice,
   lastJobId,
@@ -53,6 +56,7 @@ export function SourceTray({
   onCancelPolling,
   onDraftFromPrompt,
   onGeneratePack,
+  onImportFile,
   onResumePolling,
   onSetEnrichmentMode,
   onSetPromptText,
@@ -82,10 +86,13 @@ export function SourceTray({
   cardStyle: CardStyle;
   enrichmentMode: string;
   error: string | null;
+  fileImportError: string | null;
+  fileImportSummary: string | null;
   fontOptions: FontOption[];
   generationJob: GenerationJob | null;
   isGenerating: boolean;
   isDraftingPrompt: boolean;
+  isImporting: boolean;
   itemCount: number;
   identityNotice: string | null;
   lastJobId: string | null;
@@ -94,6 +101,7 @@ export function SourceTray({
   onCancelPolling: () => void;
   onDraftFromPrompt: () => void;
   onGeneratePack: () => void;
+  onImportFile: (file: File) => void;
   onResumePolling: () => void;
   onSelectPreset: (preset: string) => void;
   onSetEnrichmentMode: (mode: string) => void;
@@ -174,13 +182,18 @@ export function SourceTray({
               value={promptText}
               onChange={(event) => onSetPromptText(event.target.value)}
               placeholder="Best PS2 survival horror games for one spooky night"
-              disabled={isGenerating}
+              disabled={isGenerating || isImporting}
             />
             <button
               type="button"
               className="secondary-action"
               onClick={onDraftFromPrompt}
-              disabled={isDraftingPrompt || isGenerating || !promptText.trim()}
+              disabled={
+                isDraftingPrompt ||
+                isGenerating ||
+                isImporting ||
+                !promptText.trim()
+              }
             >
               {isDraftingPrompt ? "Drafting..." : "Draft list"}
             </button>
@@ -199,6 +212,31 @@ export function SourceTray({
           id="paste-panel"
           role="tabpanel"
         >
+          <div className="file-import-row">
+            <div>
+              <strong>Import a list file</strong>
+              <span>TXT, CSV, or XLSX · replaces the current list</span>
+            </div>
+            <label
+              aria-disabled={isGenerating || isDraftingPrompt}
+              className="file-import-action"
+            >
+              {isImporting ? "Choose another" : "Choose file"}
+              <input
+                accept=".txt,.csv,.xlsx"
+                aria-label="Import TXT, CSV, or XLSX list"
+                disabled={isGenerating || isDraftingPrompt}
+                onChange={(event) => {
+                  const file = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (file) {
+                    onImportFile(file);
+                  }
+                }}
+                type="file"
+              />
+            </label>
+          </div>
           <div className="source-copy">
             <label htmlFor="items">One item per line</label>
             <strong>{itemCount} items</strong>
@@ -207,7 +245,7 @@ export function SourceTray({
             id="items"
             value={text}
             onChange={(event) => onSetText(event.target.value)}
-            disabled={isGenerating}
+            disabled={isGenerating || isImporting}
             placeholder={"Silent Hill 2\nResident Evil 4\nFatal Frame"}
             spellCheck={false}
           />
@@ -224,9 +262,13 @@ export function SourceTray({
           className="primary-create-action"
           type="button"
           onClick={onGeneratePack}
-          disabled={isGenerating || isDraftingPrompt || itemCount === 0}
+          disabled={
+            isGenerating || isDraftingPrompt || isImporting || itemCount === 0
+          }
         >
-          {isGenerating
+          {isImporting
+            ? "Importing list..."
+            : isGenerating
             ? "Generating..."
             : pack
               ? "Regenerate pack"
@@ -253,7 +295,7 @@ export function SourceTray({
           <p>
             {boardFirst
               ? `${itemCount} items · ${formatToolName(enrichmentMode)}`
-              : "Describe what you want or paste the exact list."}
+              : "Describe what you want, paste items, or import a list file."}
           </p>
         </div>
         {boardFirst ? (
@@ -323,6 +365,15 @@ export function SourceTray({
       </details>
 
       <div className="workspace-feedback" aria-live="polite">
+        {fileImportError ? <p className="error">{fileImportError}</p> : null}
+        {fileImportSummary ? (
+          <p className="enrichment-status">
+            {fileImportSummary}
+            {pack
+              ? " Regenerate to update the board and temporary artifacts."
+              : " Review the editable list, then create the pack."}
+          </p>
+        ) : null}
         {error ? <p className="error">{error}</p> : null}
         {identityNotice ? (
           <p className="enrichment-status">{identityNotice}</p>

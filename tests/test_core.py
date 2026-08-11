@@ -4,7 +4,9 @@ import json
 import unittest
 import uuid
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
+
+from openpyxl import Workbook
 
 from tierzo.export import generate_pack, generate_pack_from_items, zip_pack
 from tierzo.filenames import image_filename, slugify
@@ -14,7 +16,13 @@ from tierzo.agentic import (
     plan_intake,
 )
 from tierzo.models import SourceItem, source_items_from_strings
-from tierzo.parsers import parse_csv_file, parse_text_lines
+from tierzo.parsers import (
+    InputLimitError,
+    parse_csv_file,
+    parse_input_file,
+    parse_text_lines,
+    parse_xlsx_file,
+)
 from tierzo.presets import PRESETS, get_preset
 
 
@@ -46,6 +54,75 @@ class TierzoCoreTests(unittest.TestCase):
         path = tmp / "items.csv"
         path.write_text("Mario,hero\nLuigi,hero\n,blank\n", encoding="utf-8")
         self.assertEqual(parse_csv_file(path), ["Mario", "Luigi"])
+
+    def test_parse_csv_file_collapses_multiline_cells(self) -> None:
+        tmp = temporary_workspace()
+        path = tmp / "multiline.csv"
+        path.write_text('"Alien\nAliens",movie\nArrival,movie\n', encoding="utf-8")
+
+        self.assertEqual(parse_csv_file(path), ["Alien Aliens", "Arrival"])
+
+    def test_parse_xlsx_file_reads_first_sheet_and_collapses_multiline_cells(self) -> None:
+        tmp = temporary_workspace()
+        path = tmp / "items.xlsx"
+        workbook = Workbook()
+        worksheet = workbook.active
+        worksheet.append(["Alien\nAliens", "ignored"])
+        worksheet.append(["Arrival", "ignored"])
+        worksheet.append(["Arrival", "duplicate"])
+        workbook.save(path)
+        workbook.close()
+
+        self.assertEqual(
+            parse_xlsx_file(path),
+            ["Alien Aliens", "Arrival", "Arrival"],
+        )
+
+    def test_parse_input_file_stops_at_item_limit(self) -> None:
+        tmp = temporary_workspace()
+        path = tmp / "items.txt"
+        path.write_text("Mario\nLuigi\nPeach\n", encoding="utf-8")
+
+        with self.assertRaises(InputLimitError) as raised:
+            parse_input_file(path, max_items=2)
+
+        self.assertEqual(raised.exception.kind, "too_many_items")
+        self.assertEqual(raised.exception.limit, 2)
+        self.assertIsNone(raised.exception.item_index)
+
+    def test_parse_input_file_rejects_long_item_with_index(self) -> None:
+        tmp = temporary_workspace()
+        path = tmp / "items.csv"
+        path.write_text("Mario\nToo long\n", encoding="utf-8")
+
+        with self.assertRaises(InputLimitError) as raised:
+            parse_input_file(path, max_item_length=5)
+
+        self.assertEqual(raised.exception.kind, "item_too_long")
+        self.assertEqual(raised.exception.limit, 5)
+        self.assertEqual(raised.exception.item_index, 1)
+
+    @patch("tierzo.parsers.load_workbook")
+    def test_parse_xlsx_file_closes_workbook_after_parser_error(
+        self,
+        load_workbook_mock: MagicMock,
+    ) -> None:
+        workbook = MagicMock()
+        sheet = MagicMock()
+        sheet.iter_rows.return_value = iter([("Mario",), ("Luigi",)])
+        workbook.worksheets = [sheet]
+        load_workbook_mock.return_value = workbook
+
+        with self.assertRaises(InputLimitError):
+            parse_xlsx_file(Path("items.xlsx"), max_items=1)
+
+        load_workbook_mock.assert_called_once_with(
+            Path("items.xlsx"),
+            data_only=True,
+            keep_links=False,
+            read_only=True,
+        )
+        workbook.close.assert_called_once_with()
 
     def test_generate_pack_writes_images_and_manifest(self) -> None:
         tmp = temporary_workspace()

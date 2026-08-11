@@ -8,6 +8,7 @@ import { SourceTray } from "../components/source-tray";
 import { TierBoard } from "../components/tier-board";
 import { WorkspaceProgress } from "../components/workspace-progress";
 import { useCapabilities } from "../hooks/use-capabilities";
+import { useFileIntake } from "../hooks/use-file-intake";
 import { usePackGeneration } from "../hooks/use-pack-generation";
 import { useTierBoard } from "../hooks/use-tier-board";
 import { apiUrl } from "../lib/api";
@@ -123,6 +124,13 @@ export default function Home() {
     resolveSavedCardStyle(savedState.cardStyle),
   );
   const [isExporting, setIsExporting] = useState(false);
+  const {
+    clearFeedback: clearFileImportFeedback,
+    error: fileImportError,
+    importFile,
+    isImporting,
+    summary: fileImportSummary,
+  } = useFileIntake();
   const deferredText = useDeferredValue(text);
   const {
     capabilities,
@@ -293,6 +301,9 @@ export default function Home() {
   }
 
   async function handleGeneratePack(overrides: MatchOverrides = {}) {
+    if (isImporting) {
+      return;
+    }
     const nextPack = await generatePack(overrides);
     if (!nextPack) {
       return;
@@ -306,7 +317,13 @@ export default function Home() {
     );
   }
 
-  function updateSourceText(nextText: string) {
+  function updateSourceText(
+    nextText: string,
+    source: "file" | "manual" = "manual",
+  ) {
+    if (source === "manual") {
+      clearFileImportFeedback();
+    }
     const reconciliation = reconcileSourceItems(
       sourceItems,
       parseSourceText(nextText),
@@ -346,7 +363,7 @@ export default function Home() {
 
   async function handleDraftFromPrompt() {
     const nextPrompt = promptText.trim();
-    if (!nextPrompt) {
+    if (!nextPrompt || isImporting) {
       return;
     }
 
@@ -390,6 +407,7 @@ export default function Home() {
         warnings: Array.isArray(rawDraft.warnings) ? rawDraft.warnings : [],
       };
       setPromptDraft(draft);
+      clearFileImportFeedback();
       setTitle(draft.title);
       setDescription(draft.description ?? "");
       const draftedItems = reconcileSourceItems([], draft.items).items;
@@ -410,6 +428,14 @@ export default function Home() {
     } finally {
       setIsDraftingPrompt(false);
     }
+  }
+
+  async function handleImportFile(file: File) {
+    const intake = await importFile(file);
+    if (!intake) {
+      return;
+    }
+    updateSourceText(intake.items.join("\n"), "file");
   }
 
   function selectPreset(nextPreset: string) {
@@ -524,10 +550,13 @@ export default function Home() {
           cardStyle={cardStyle}
           enrichmentMode={resolvedEnrichmentMode}
           error={error}
+          fileImportError={fileImportError}
+          fileImportSummary={fileImportSummary}
           fontOptions={FONT_OPTIONS}
           generationJob={generationJob}
           isGenerating={isGenerating}
           isDraftingPrompt={isDraftingPrompt}
+          isImporting={isImporting}
           itemCount={itemCount}
           identityNotice={identityNotice}
           lastJobId={lastJobId}
@@ -536,6 +565,7 @@ export default function Home() {
           onCancelPolling={cancelPolling}
           onDraftFromPrompt={() => void handleDraftFromPrompt()}
           onGeneratePack={() => void handleGeneratePack()}
+          onImportFile={(file) => void handleImportFile(file)}
           onResumePolling={resumePolling}
           onSelectPreset={selectPreset}
           onSetEnrichmentMode={setEnrichmentMode}

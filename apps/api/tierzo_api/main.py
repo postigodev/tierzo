@@ -9,10 +9,10 @@ from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Callable, Literal
+from typing import Annotated, Callable, Literal
 
 import httpx
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Request
+from fastapi import BackgroundTasks, FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field, model_validator
@@ -34,6 +34,11 @@ from .capabilities import (
     outcome_for,
 )
 from .environment import ROOT_DIR
+from .file_intake import (
+    FileIntakeException,
+    FileIntakeResponse,
+    parse_uploaded_file,
+)
 from .lifecycle import (
     PACK_LIFECYCLE_REGISTRY,
     STORAGE_DIR,
@@ -48,6 +53,7 @@ AGENT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "agentic-intake"
 PROMPT_DRAFT_CACHE_DIR = ROOT_DIR / ".tierzo" / "cache" / "prompt-drafts"
 MAX_TEXT_LENGTH = int(os.getenv("MAX_TEXT_LENGTH", "10000"))
 MAX_LIST_ITEMS = int(os.getenv("MAX_LIST_ITEMS", "200"))
+MAX_ITEM_NAME_LENGTH = 200
 PACK_TTL_SECONDS = int(os.getenv("PACK_TTL_SECONDS", "3600"))
 JOB_ACTIVE_CAPACITY = int(os.getenv("JOB_ACTIVE_CAPACITY", "8"))
 JOB_TERMINAL_CAPACITY = int(os.getenv("JOB_TERMINAL_CAPACITY", "1024"))
@@ -137,7 +143,7 @@ class SourceItemRequest(BaseModel):
         max_length=64,
         pattern=r"^[A-Za-z0-9][A-Za-z0-9._:-]*$",
     )
-    name: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=MAX_ITEM_NAME_LENGTH)
 
 
 class ItemAssetOverrideRequest(BaseModel):
@@ -563,6 +569,23 @@ def capabilities() -> CapabilitiesResponse:
 @app.get("/presets")
 def presets() -> dict[str, list[str]]:
     return {"presets": sorted(PRESETS)}
+
+
+@app.post("/intakes/files", response_model=FileIntakeResponse)
+async def create_file_intake(
+    file: Annotated[UploadFile, File(description="TXT, CSV, or XLSX list")],
+) -> FileIntakeResponse:
+    try:
+        return await parse_uploaded_file(
+            file,
+            max_items=MAX_LIST_ITEMS,
+            max_item_length=MAX_ITEM_NAME_LENGTH,
+        )
+    except FileIntakeException as error:
+        raise HTTPException(
+            status_code=error.status_code,
+            detail=error.detail.model_dump(exclude_none=True),
+        ) from error
 
 
 @app.post("/prompt-drafts", response_model=PromptDraftResponse)

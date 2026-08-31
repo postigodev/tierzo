@@ -1,141 +1,90 @@
-# Tierzo Product Brief
+# Tierzo Product
 
-Tierzo is an agentic tier-list asset factory. It turns messy lists, spreadsheets, links, and prompts into polished image packs, editable tier-board previews, and exports that are ready for TierMaker or standalone sharing.
+This document is the single source of product direction. `README.md` describes
+what users can run today; `docs/ARCHITECTURE.md` owns implemented technical
+contracts; GitHub issues own task-specific scope and sequencing.
 
-## Positioning
+## Product Definition
 
-Tierzo is not a TierMaker clone. It is the prep layer before and around tier-list creation:
+Tierzo is a reviewable tier-pack creation tool and execution engine. A user can
+supply or import a list, edit it, optionally enrich assets, correct or supply
+assets, generate a pack, rank items, regenerate without losing compatible
+work, and export portable artifacts.
 
-- Gather items from messy inputs.
-- Normalize and enrich them.
-- Generate consistent visual assets.
-- Let users review what the agent/source tools found.
-- Preview and rank items in a tier board.
-- Export the final result or move the assets into TierMaker with minimal friction.
+Tierzo is the preparation and review layer around tier-list creation, not a
+TierMaker clone. The standalone web app and CLI are first-class v0.1 surfaces.
 
-## Target Users
+## Target Workflow
 
-- Creators who make tier-list videos, streams, thumbnails, or social posts.
-- Fandom communities ranking games, movies, anime, music, characters, teams, products, or memes.
-- Power users who maintain lists in spreadsheets, Notion, Google Sheets, or plain text.
-- Developers and open-source users who want an automatable tier-list asset pipeline.
+1. Supply a pasted list, TXT/CSV/XLSX file, or prompt.
+2. Review and edit normalized source items.
+3. Choose deterministic text cards or an available optional accelerator.
+4. Generate through an observable job.
+5. Review generated cards, source information, warnings, and uncertain matches.
+6. Correct assets where supported and regenerate without discarding compatible
+   item identity or rankings.
+7. Rank items on the tier board.
+8. Export a board PNG, image ZIP, manifest, or TierMaker compatibility payload.
 
-## Core Promise
+## Product Invariants
 
-Paste anything. Tierzo figures out what it is, builds the image pack, shows its work, lets you correct it, and exports the result.
+- Basic generation works without AI.
+- AI and built-in enrichers are optional accelerators, not prerequisites.
+- AI output crosses typed validation before affecting generation.
+- Uncertain sourcing is visible and correctable; failures degrade honestly.
+- Stable item identity preserves compatible ranking work across regeneration.
+- Provenance, confidence, and attribution are preserved when applicable.
+- Generated artifacts and manifests remain portable.
+- Temporary hosted artifacts are represented honestly; loss does not silently
+  erase compatible editable browser state.
+- TierMaker compatibility remains user-mediated, uses public workflows and
+  portable exports, and never requires TierMaker credentials or private APIs.
+- The local open-source core remains independently useful.
 
-## Current Product State
+## UX And Visual Invariants
 
-Tierzo currently has:
+- The usable workspace, not a marketing hero, is the primary web surface.
+- A new workspace is understandable without fake preloaded content.
+- Source, generation progress, review, ranking, and export remain discoverable
+  parts of one coherent flow.
+- Generated output must be inspectable and useful outside Tierzo.
+- The dark, pixel-influenced identity is intentional; do not flatten it into a
+  generic dashboard.
+- User-facing changes are complete only when verified in the real visible
+  state or generated artifact they affect.
 
-- Python core and CLI for TXT, CSV, XLSX, manifests, ZIPs, and image generation.
-- FastAPI backend with job-based generation.
-- Next.js demo with inline editing, Card Lab, tier board, PNG export, ZIP export, manifest, and extension JSON.
-- Auto Agent intake with OpenAI support and caching.
-- TMDb movie poster enrichment.
-- Review Matches with confidence/source metadata and text-card overrides.
-- Legacy XLSX script preserved in `examples/`.
+## v0.1 Boundary
 
-## Product Pillars
+The standalone v0.1 is complete when the current workflow is genuinely usable,
+documented, and releasable. Remaining functional work is finite:
 
-### Universal Intake
+1. Validated local/manual asset ingestion ([#7](https://github.com/postigodev/tierzo/issues/7)).
+2. Richer correction for ambiguous built-in matches ([#8](https://github.com/postigodev/tierzo/issues/8)).
+3. Concrete release and usability work from
+   [#11](https://github.com/postigodev/tierzo/issues/11): CI, truthful public
+   documentation, screenshots or a demo artifact, deployment verification,
+   provider attribution/licensing, honest temporary-storage limitations, and a
+   coherent tagged release.
 
-Tierzo should accept increasingly flexible inputs:
+Completed capabilities such as web file intake are current behavior, not
+remaining work.
 
-- Pasted text.
-- CSV, TXT, and XLSX files.
-- Public Google Sheets links.
-- URLs from supported sources.
-- Natural language prompts such as “top 50 horror movies” or “best PS2 survival horror games”.
+## Non-Goals For v0.1
 
-### Agentic Curation
+The following are not requirements for standalone v0.1 completion:
 
-The agent should help transform raw input into reliable item candidates:
+- MCP or a ChatGPT app;
+- additional providers such as Steam, Spotify, or AniList;
+- a generalized provider/plugin framework;
+- a Chrome extension;
+- authentication, billing, permanent hosted history, or durable accounts;
+- community, collaboration, or team features;
+- cloning TierMaker's editor or community platform.
 
-- Detect the likely domain.
-- Clean noisy list formatting.
-- Resolve ambiguous entities.
-- Fetch metadata and source images when supported.
-- Ask for human confirmation when confidence is low.
-- Preserve provenance so users know where each asset came from.
+## Possible Future Work
 
-The agent should be transparent first, autonomous second. Users should see decisions before they are locked into exports.
-
-### Beautiful Assets
-
-Generated assets should feel creator-ready, not like default script output:
-
-- Consistent dimensions.
-- Strong text fitting and wrapping.
-- Style presets.
-- Card Lab customization.
-- Image-based tiles where APIs can provide posters, covers, logos, or artwork.
-- Text-card fallbacks for unsupported or ambiguous items.
-
-### Tier Board Preview
-
-Tierzo should provide a usable tier-list board before export:
-
-- Editable tier labels.
-- Drag-and-drop item ranking.
-- Preview of the final image.
-- Download as a final tier-list PNG.
-- Download as a source asset pack.
-
-### TierMaker Compatibility
-
-Tierzo should complement TierMaker without depending on private APIs:
-
-- Export image formats and sizes that work well with TierMaker.
-- Split exports into upload batches that respect TierMaker limits.
-- Generate a manifest and upload guide.
-- Provide an optional Chrome extension companion for guided TierMaker workflows.
-
-## Differentiators
-
-- Tierzo works before the tier-list editor, where most tedious work lives.
-- Tierzo can use agents and source APIs to turn vague inputs into curated assets.
-- Tierzo exposes matches, confidence, and sources instead of hiding agent decisions.
-- Tierzo supports both standalone ranking and TierMaker-compatible exports.
-- Tierzo keeps a local-first/open-source core while offering a polished hosted demo later.
-
-## Non-Goals
-
-- Do not clone TierMaker’s full community platform.
-- Do not rely on reverse-engineered private TierMaker APIs.
-- Do not require AI for basic local generation.
-- Do not make the Chrome extension the only useful path.
-- Do not silently choose low-confidence matches without review.
-
-## First Wow Moment
-
-The first public demo should show this flow:
-
-1. Paste a messy list.
-2. Tierzo normalizes it.
-3. Tierzo generates polished item cards.
-4. User ranks the cards in a live tier-board preview.
-5. User downloads a final PNG and a TierMaker-ready ZIP.
-
-Status: mostly implemented.
-
-## Second Wow Moment
-
-The second public demo should show enrichment:
-
-1. Paste “top 50 horror movies”.
-2. Tierzo detects movies.
-3. Tierzo fetches posters and metadata.
-4. User reviews matches and corrects a few.
-5. Tierzo regenerates a polished pack with credits.
-
-Status: started with Auto Agent, TMDb, Review Matches, and text-card overrides.
-
-## Next Product Bet
-
-The next differentiating work should focus on a provider/plugin contract:
-
-- Make match review richer.
-- Add “search again” and manual replacement per item.
-- Add Steam or Spotify as the second real provider.
-- Keep all providers returning the same reviewable match shape.
+After standalone v0.1, evidence from real use may justify host adapters,
+additional enrichers, a generalized provider boundary, durable hosted storage,
+or assisted distribution workflows. These are options, not commitments or
+current implementation plans. Detailed future plans belong in active issues,
+not this document.

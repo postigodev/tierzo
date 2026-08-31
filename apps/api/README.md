@@ -32,7 +32,8 @@ pnpm dev:api
 
 The canonical form preserves item identity across regeneration. Its
 `item_asset_overrides` map is keyed by item ID. Legacy `asset_overrides`
-remains name-keyed for compatibility. See [item identity](../../docs/IDENTITY.md).
+remains name-keyed for compatibility. See
+[item identity](../../docs/ARCHITECTURE.md#item-identity-and-reconciliation).
 
 ## Ephemeral lifecycle settings
 

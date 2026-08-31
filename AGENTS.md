@@ -34,8 +34,7 @@ are the archive; do not create parallel sources of truth.
 - Do not use Python or custom scripts for text search when `rg` is sufficient.
 - Use installed skills deliberately, not ritualistically. Consult external
   documentation only for version-sensitive or genuinely unknown contracts;
-  inspect installed versions first and prefer current official sources via
-  Context7.
+  inspect installed versions first and prefer current official sources.
 
 ## Change Discipline
 
@@ -103,7 +102,9 @@ cannot run, state exactly what remains unverified and why.
 - Do not add MCP, providers, extensions, durable infrastructure, auth, billing,
   or deployment scope unless the task explicitly requires it.
 - Note unrelated problems separately instead of expanding the diff.
-- Do not stage, commit, push, merge, or release unless the user requests it.
+- Do not merge, release, force-push, rewrite remote history, or perform
+  destructive Git operations unless explicitly requested. Follow the task and
+  environment workflow for staging, commits, and branch pushes.
 
 ## Final Report
 

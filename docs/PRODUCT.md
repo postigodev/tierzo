@@ -6,10 +6,12 @@ contracts; GitHub issues own task-specific scope and sequencing.
 
 ## Product Definition
 
-Tierzo is a reviewable tier-pack creation tool and execution engine. A user can
-supply or import a list, edit it, optionally enrich assets, correct or supply
-assets, generate a pack, rank items, regenerate without losing compatible
-work, and export portable artifacts.
+Tierzo is a reviewable tier-pack creation tool and execution engine. The
+intended standalone v0.1 workflow lets a user supply or import a list, edit it,
+optionally enrich assets, correct or supply assets, generate a pack, rank
+items, regenerate without losing compatible work, and export portable
+artifacts. Current match correction can force a sourced asset back to a text
+card; local/manual asset supply remains work tracked in #7.
 
 Tierzo is the preparation and review layer around tier-list creation, not a
 TierMaker clone. The standalone web app and CLI are first-class v0.1 surfaces.

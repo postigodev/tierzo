@@ -1,214 +1,166 @@
 # Tierzo Architecture
 
-Tierzo is a modular product with a deterministic Python core, a FastAPI backend, a public Next.js demo, agentic intake, source enrichers, and an optional browser extension companion.
+This document is the single source of implemented technical contracts.
+`README.md` owns public setup and current behavior; `docs/PRODUCT.md` owns
+product direction. Future adapters are not part of this architecture until
+they exist.
 
-The architecture optimizes for demoable slices. A feature is more valuable when it can be seen, reviewed, exported, or shared from the web demo.
-
-## Current Monorepo
-
-```text
-apps/
-  api/          FastAPI service for generation, jobs, agent workflows, and enrichers
-  web/          Next.js app for demo, preview, ranking, and export
-docs/           Product and implementation notes
-examples/       Legacy/reference scripts
-scripts/        Repo helper scripts
-src/tierzo/     Python package for parsing, rendering, enrichment, manifests, ZIPs, and CLI
-tests/          Unit and API tests
-```
-
-The original XLSX prototype is preserved at `examples/generate_text_images.py`. New work should use the tested `src/tierzo` package, CLI, API, and web demo.
-
-## Core
-
-The core package owns deterministic behavior:
-
-- Parse raw text, TXT, CSV, and XLSX files.
-- Render text cards and image cards.
-- Apply style presets and Card Lab custom styles.
-- Export ZIP files.
-- Write portable manifests with source metadata.
-- Validate pack constraints.
-
-The core should not depend on web framework code or agent runtime code.
-
-## API
-
-The API coordinates backend work:
-
-- Accept pasted content.
-- Create observable generation jobs.
-- Call the core package.
-- Run agentic extraction and enrichment.
-- Cache agentic intake plans.
-- Expose match/source metadata to the frontend.
-- Accept user overrides such as forcing an item back to a text card.
-- Store temporary artifacts under `.tierzo`.
-- Return pack previews, manifests, ZIPs, and extension payloads.
-
-Generation jobs and packs are intentionally ephemeral in the current
-deployment model. Jobs use the server-owned states `pending`, `running`,
-`completed`, `failed`, and `lost`. A completed job keeps that successful
-outcome even if its separate `pack_status` later becomes `expired` or `lost`.
-Pack states are `completed`, `expired`, and `lost`: `expired` requires retained
-UTC expiration evidence, while an unknown resource without that evidence is
-`lost`. Client polling cancellation and timeout are local outcomes, not server
-failures.
-
-Pack status checks are observational and do not renew artifact lifetime.
-Temporary manifests carry RFC 3339 UTC `created_at` and `expires_at` values;
-artifact endpoints return structured `410 pack_expired` or `404 pack_lost`
-errors consistently with the status resolver. Job records, expiration
-tombstones, and local artifacts are bounded but remain in-process/local
-state—not durable history.
-
-FastAPI remains the preferred backend because Python fits Excel parsing, image generation, AI orchestration, and file exports.
-
-## Web App
-
-The web app is the product surface:
-
-- Paste input.
-- Edit title, description, tier labels, and card style.
-- Show live generation progress from job steps.
-- Review source matches and apply simple human overrides.
-- Drag cards through a tier board.
-- Export final tier-list PNG.
-- Export ZIP, manifest, and TierMaker extension JSON.
-
-Next.js remains the preferred frontend because the project needs a deployable demo, strong React ergonomics, and a polished product surface.
-
-The first screen should be the usable generator experience, not a marketing hero. See `docs/DEMO.md` for visual and interaction requirements.
-
-The browser persists the editable workspace separately from temporary artifact
-availability. On reload it validates a saved pack. Confirmed expiration or loss
-removes only the pack snapshot and artifact actions; source items, tiers,
-ranking assignments, title, description, style, enrichment configuration, and
-the last generation job ID remain available for regeneration. A failed or
-offline validation is non-destructive and reports availability as unknown.
-
-Polling uses a bounded deadline configured by
-`NEXT_PUBLIC_JOB_POLL_TIMEOUT_MS` (60 seconds by default). Cancelling or timing
-out polling retains the job ID so the same job can be queried again; it does
-not cancel or fail server work.
-
-## Agent
-
-The agent sits above deterministic tools:
+## System Boundaries
 
 ```text
-Input -> classify -> extract candidates -> choose tool -> enrich -> ask/review -> produce pack
+apps/web/       Next.js workspace, review, ranking, and browser persistence
+    | HTTP
+apps/api/       FastAPI validation, planning, jobs, enrichment, and artifacts
+    |
+src/tierzo/     Deterministic parsing, rendering, manifests, ZIPs, and CLI
 ```
 
-Current agentic intake returns typed plans with `domain`, `tool`, `items`, `confidence`, questions, source, and cache metadata. Agent output must be represented as typed data before it affects rendering or export.
+`examples/` contains the legacy XLSX prototype. New behavior belongs in the
+tested core, API, or web boundary.
 
-The strongest near-term goal is not “fully autonomous everything”. It is transparent automation:
+### Deterministic Core
 
-- Show what the agent thought the list was.
-- Show which tool it picked.
-- Show which matches it found.
-- Let the user correct suspicious items.
+The Python package owns source parsing, normalized source items, text/image
+card rendering, presets, filenames, `tierzo.pack.v1` manifests, and ZIP export.
+It has no web-framework or agent-runtime dependency. The CLI calls this layer
+directly and assigns historical positional IDs when callers provide only
+strings.
 
-## Enrichers
+### FastAPI API
 
-Enrichers are source-specific modules:
+The API owns request validation and coordination:
 
-- Search by item name.
-- Return candidate matches.
-- Include confidence and source metadata.
-- Provide usable image URLs or downloaded images.
-- Degrade gracefully to text cards.
-- Avoid hiding ambiguity from the user.
+- `POST /intakes/files` validates and parses TXT, CSV, and XLSX uploads.
+- `POST /prompt-drafts` produces a typed draft from explicit or OpenAI-backed
+  prompts.
+- `POST /packs` performs synchronous generation for compatibility.
+- `POST /jobs` and `GET /jobs/{id}` expose observable generation.
+- `/packs/{id}/status`, `/files/{filename}`, `/zip`, and
+  `/tiermaker-extension.json` expose lifecycle and artifacts.
+- `GET /capabilities` reports deterministic, OpenAI, and TMDb availability.
 
-Current first connector:
+Pack generation accepts exactly one input shape: legacy `text`, or canonical
+structured `items` containing unique opaque IDs and names. Structured requests
+use ID-keyed overrides. The legacy path retains name-keyed text overrides for
+compatibility.
 
-- TMDb movie posters.
+### Next.js Web App
 
-Likely next connectors:
+The web app owns the editable workspace and user flow: paste/file/prompt
+intake, source editing, capability-aware generation modes, progress, match
+review, Card Lab styling, tier-board ranking, and downloads. It consumes typed
+API responses and must not reproduce core rendering or backend lifecycle logic.
 
-- Steam for games.
-- Spotify for albums, tracks, and artists.
-- AniList for anime.
-- RAWG, PokéAPI, Wikidata, or link/image sources later.
+The browser stores `tierzo.editor.v3` in local storage. It may read and migrate
+`tierzo.editor.v2` without deleting the old value. Editable workspace state and
+temporary pack availability are separate: confirmed expiration or loss removes
+artifact-backed actions, not the user's compatible source, tiers, rankings,
+style, generation settings, or last job ID. Failed/offline validation is
+non-destructive.
 
-## Chrome Extension
+## Intake Contract
 
-The extension is a companion, not the core product:
+TXT uses normalized non-empty lines. CSV uses the first column; XLSX uses the
+first column of the first worksheet. CSV/XLSX cell whitespace is collapsed,
+source order and duplicates are retained, and headers are not inferred.
 
-- Detect supported TierMaker pages.
-- Read or receive Tierzo pack manifests.
-- Guide upload batches.
-- Fill safe user-visible fields when possible.
-- Avoid reverse-engineered private APIs.
+File intake validates the complete upload before replacing web source state.
+It enforces configured byte, item, cell, XLSX member, and XLSX uncompressed-size
+limits; uses server-controlled temporary paths where required; never derives a
+storage path from the client filename; and removes temporary source files after
+success or failure. Uploaded source files are not pack artifacts.
 
-Browser file input restrictions may limit true one-click upload, so the extension should start as guided assistance.
+## Item Identity And Reconciliation
 
-## Data Model Sketch
+An item ID is the workspace-scoped identity of one list entry. It is opaque,
+independent of display name, and never a filename or sort key. The web app
+creates and persists IDs; the core copies them into manifests and TierMaker
+payloads. Board assignments and canonical overrides are keyed by ID.
 
-Item IDs are workspace-scoped, opaque identities that survive regeneration;
-see [Item Identity And Reconciliation](IDENTITY.md) for compatibility and
-migration semantics.
+Reconciliation follows these rules:
 
-```json
-{
-  "pack": {
-    "id": "example-pack",
-    "title": "Example Pack",
-    "items": [
-      {
-        "id": "001",
-        "name": "Alien",
-        "filename": "001-alien.png",
-        "status": "ready",
-        "asset_kind": "image-card",
-        "source_type": "tmdb",
-        "source_value": "348",
-        "source_url": "https://www.themoviedb.org/movie/348",
-        "confidence": 0.98,
-        "width": 1024,
-        "height": 1024
-      }
-    ],
-    "enrichment": {
-      "mode": "auto",
-      "resolved_mode": "tmdb_movie",
-      "asset_overrides": {
-        "Ambiguous Item": "text"
-      }
-    }
-  }
-}
-```
+- exact names preserve IDs across reorder;
+- a clear one-for-one replacement is treated as a reviewable rename and keeps
+  the ID;
+- duplicate names remain separate items;
+- new entries receive new IDs and start unranked;
+- removed IDs are pruned deterministically;
+- surviving IDs retain tier and relative order when generated assets change;
+- ambiguous many-to-many edits receive new IDs with a warning rather than a
+  silent guess.
 
-## Key Constraints
+This is not cross-device entity identity, semantic resolution, alias history,
+workspace merging, or recognition of an item deleted and recreated later.
+Legacy string callers cannot preserve identity through structural edits because
+they do not supply IDs.
 
-- Basic generation must work without AI.
-- AI output must be validated before use.
-- External API enrichers must degrade gracefully.
-- Generated assets should preserve source credits where relevant.
-- TierMaker integration should stay compatible and user-mediated.
-- Long-running generation should remain job-based and observable before public traffic.
+## Planning, Enrichment, And Assets
 
-## Deployment Direction
+Deterministic planning handles explicit comma-, semicolon-, or newline-separated
+lists. Open-ended prompt drafting requires OpenAI. Agent output is validated as
+typed plan data before it can select an execution path.
 
-Initial deployment can be split:
+TMDb movie posters are the only built-in external enricher. Enrichment returns
+source type/value/URL, confidence, and a local decoded image when successful;
+missing configuration, lookup failures, and partial matches produce structured
+warnings and text-card fallbacks. Users can currently force an ID-keyed match
+back to a text card.
 
-- Web: Vercel.
-- API: Railway, Fly.io, Render, or another Python-friendly host.
-- Temporary storage: local filesystem for development, object storage later.
-- Background jobs: synchronous first, queue later when batches become slow.
+Rendered items converge on the manifest's item contract (`id`, `name`,
+`filename`, `asset_kind`, dimensions, and optional source/confidence fields).
+There is no supported local/manual image-ingestion contract yet. A disabled-by-
+default legacy URL override exists behind `ALLOW_MANUAL_IMAGE_URLS`; it is not
+exposed by the web app and must not be treated as the future asset-ingestion
+design.
 
-### Ephemeral lifecycle settings
+Provider-specific fetching stays behind the API/core enrichment boundary.
+External inputs are untrusted: new file or remote transports require decoding
+validation, bounded bytes/dimensions/time, safe temporary paths and cleanup;
+arbitrary server-side URL fetching additionally requires deliberate SSRF and
+redirect controls.
 
-The API supports:
+## Jobs And Ephemeral Packs
 
-- `PACK_TTL_SECONDS` for temporary artifact lifetime.
-- `PACK_TOMBSTONE_RETENTION_SECONDS` and `PACK_TOMBSTONE_CAPACITY` for bounded
-  expiration evidence.
-- `JOB_ACTIVE_CAPACITY` (default `8`) for concurrent admission.
-- `JOB_TERMINAL_RETENTION_SECONDS` and `JOB_TERMINAL_CAPACITY` for bounded
-  completed/failed job records.
+Jobs and packs are local and non-durable. Job states are `pending`, `running`,
+`completed`, `failed`, and `lost`. Active admission is bounded; a full API
+returns typed `503 job_capacity_reached`. Completed jobs keep their terminal
+outcome even if the associated pack later expires or is lost.
 
-These settings make the local lifecycle explicit; they do not provide
-cross-process recovery, durable queues, permanent history, accounts, or durable
-artifact storage.
+Pack states are `completed`, `expired`, and `lost`. `expired` requires retained
+UTC expiration evidence; an unavailable resource without that evidence is
+`lost`. Status reads do not renew lifetime. Artifact endpoints consistently
+return typed `410 pack_expired` or `404 pack_lost` errors. Browser polling
+timeout or cancellation is a client outcome and does not cancel or fail server
+work.
+
+Manifests record RFC 3339 UTC `created_at` and `expires_at`. Local artifact,
+tombstone, active-job, and terminal-job retention is configured with
+`PACK_*` and `JOB_*` environment variables. This provides bounded local state,
+not cross-process recovery, durable queues, accounts, or permanent history.
+
+## Portable Artifacts And TierMaker Compatibility
+
+`tierzo.pack.v1` is the portable pack manifest. It records title/version,
+ordered item IDs, filenames, asset/source metadata, and API-added generation,
+style, row-label, and lifecycle metadata. ZIPs contain generated images and the
+manifest.
+
+The API also renders `tierzo.tiermaker-extension.v1` from an available pack. It
+contains template metadata, public artifact URLs, row labels, ordered images,
+and batches of at most 500 images. This is an export contract despite its
+historical schema name: no browser extension exists. Consumers may assist with
+public TierMaker forms, but the user must review and submit. Tierzo never asks
+for TierMaker credentials or depends on private TierMaker APIs.
+
+## Configuration And Deployment
+
+The repository runs the web app and API as separate local processes. No
+production deployment configuration is checked in. Deployments must configure
+the web API base URL and explicit frontend CORS origins, provide optional
+OpenAI/TMDb keys server-side, and account for the API's process-local storage.
+
+Important boundaries are documented in `.env.example`: input limits,
+`FRONTEND_URL`/`ALLOW_ORIGINS`, `NEXT_PUBLIC_API_URL`, `TIERZO_STORAGE_DIR`, pack
+retention, and job capacity/retention. A multi-instance or restart-safe service
+would require a deliberate durable storage and job design; the current system
+must not imply those guarantees.
